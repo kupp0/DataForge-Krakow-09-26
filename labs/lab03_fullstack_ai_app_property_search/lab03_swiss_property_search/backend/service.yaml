@@ -1,0 +1,31 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: search-backend
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/network-interfaces: '[{"network":"lab-vpc","subnetwork":"lab-subnet"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT}
+      containers:
+      - name: backend
+        image: ${BACKEND_IMAGE}
+        ports:
+        - containerPort: 8080
+        env:
+        - name: GCP_PROJECT_ID
+          value: "${PROJECT_ID}"
+        - name: GCP_LOCATION
+          value: "${REGION}"
+        - name: AGENT_CONTEXT_SET_ID_ALLOYDB
+          value: "${AGENT_CONTEXT_SET_ID_ALLOYDB}"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: ALLOWED_GCS_BUCKET
+          value: "${PROJECT_ID}-search-demo-images"

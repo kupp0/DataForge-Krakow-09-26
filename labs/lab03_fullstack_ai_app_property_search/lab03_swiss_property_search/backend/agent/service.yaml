@@ -1,0 +1,49 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: ${AGENT_SERVICE}
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/network-interfaces: '[{"network":"lab-vpc","subnetwork":"lab-subnet"}]'
+        run.googleapis.com/vpc-access-egress: private-ranges-only
+    spec:
+      serviceAccountName: ${SERVICE_ACCOUNT}
+      containers:
+      - name: agent
+        image: ${AGENT_IMAGE}
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ALLOWED_ORIGINS
+          value: "${ALLOWED_ORIGINS}"
+        - name: GOOGLE_CLOUD_PROJECT
+          value: "${PROJECT_ID}"
+        - name: GOOGLE_CLOUD_REGION
+          value: "${REGION}"
+        - name: GOOGLE_CLOUD_LOCATION
+          value: "global"
+        - name: GOOGLE_GENAI_USE_VERTEXAI
+          value: "true"
+        - name: TOOLBOX_URL
+          value: "http://localhost:8081"
+      - name: toolbox
+        image: us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:latest
+        args:
+        - "--tools-file=/secrets/tools.yaml"
+        - "--address=0.0.0.0"
+        - "--port=8081"
+        volumeMounts:
+        - name: tools-secret
+          mountPath: /secrets
+      volumes:
+      - name: tools-secret
+        secret:
+          secretName: tools
+          items:
+          - key: latest
+            path: tools.yaml

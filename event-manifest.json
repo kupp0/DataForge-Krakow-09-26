@@ -1,0 +1,50 @@
+{
+  "event_name": "DataForge Data and AI Labs Krakow",
+  "selected_labs": [
+    {
+      "id": "alloydb_vectors",
+      "name": "One Million Vectors, Zero Loops (AlloyDB Vectors)",
+      "assets_src": "labs/lab01_alloydb_vectors",
+      "dest_dir": "labs/lab01_alloydb_vectors",
+      "skills": [],
+      "has_infra": true
+    },
+    {
+      "id": "spanner_disneyland",
+      "name": "Disneyland Agentic Codelab (Spanner & BigQuery)",
+      "assets_src": "labs/lab02_spanner_disneyland",
+      "dest_dir": "labs/lab02_spanner_disneyland",
+      "skills": [
+        {
+          "name": "spanner-graph",
+          "src": "labs/lab02_spanner_disneyland/.agents/skills/spanner-graph/SKILL.md"
+        },
+        {
+          "name": "vertex-config",
+          "src": "labs/lab02_spanner_disneyland/.agents/skills/vertex-config/SKILL.md"
+        }
+      ],
+      "has_infra": true
+    },
+    {
+      "id": "fullstack_ai_app_property_search",
+      "name": "Swiss Property Search (Fullstack AI App & Gemini Data Analytics)",
+      "assets_src": "labs/lab03_fullstack_ai_app_property_search",
+      "dest_dir": "labs/lab03_fullstack_ai_app_property_search",
+      "skills": [],
+      "has_infra": false
+    }
+  ],
+  "mcp_servers": [
+    {
+      "id": "google-managed-spanner",
+      "type": "plugin",
+      "config": {
+        "url": "https://spanner.googleapis.com/mcp",
+        "serverUrl": "https://spanner.googleapis.com/mcp",
+        "serverURL": "https://spanner.googleapis.com/mcp",
+        "authProviderType": "google_credentials"
+      }
+    }
+  ]
+}
