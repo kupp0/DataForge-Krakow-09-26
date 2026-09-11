@@ -160,17 +160,30 @@ with tab_leaderboard:
     with b_col3:
         st.warning(f"**🔥 Spanner Meltdown (Stress Testers)**\n\n{', '.join(meltdowns) if meltdowns else 'All Spanner instances operating smoothly.'}")
 
-# --- TAB 2: Business & Pricing Arena ---
 with tab_business:
     st.subheader("🎢 Price Elasticity & Revenue Optimization")
-    st.markdown(f"""
-    **The Gamified Challenge Rule**:
-    - Benchmark Price: **${BENCHMARK_PRICE:.2f}**
-    - Higher ticket price $\\rightarrow$ fewer visitors per attraction run.
-    - Lower ticket price $\\rightarrow$ more visitors per run, but lower margin.
-    - Optimum sweet spot: **$20.00 - $22.50**.
-    - Over $35.00 triggers empty rides (*Luxury Trap*). Below $8.00 leaves revenue on the table (*Bargain Basement*).
-    """)
+    
+    intel_col, pop_col = st.columns([4, 1])
+    with intel_col:
+        st.markdown("""
+        > 🎪 **Disneyland Economic Intelligence Briefing**:
+        > Park visitor attendance is governed by **price elasticity**:
+        > * **Premium Pricing**: Higher ticket prices yield higher margin per head, but attendance drops.
+        > * **Discount Pricing**: Lower ticket prices pack the ride queues up to maximum capacity (100 visitors), but compress gross margins.
+        > * **Extreme Risk**: Unreasonable prices empty the queues (*Luxury Trap*), while rock-bottom prices fail to cover attraction operating costs (*Bargain Basement*).
+        > 
+        > 💡 *Market Guidance: Typical Disneyland attractions charge between **$10.00** and **$30.00**. Prompt your AI agent to optimize ticket pricing to maximize total park revenue!*
+        """)
+    with pop_col:
+        with st.popover("🔐 Facilitator Rules"):
+            st.markdown(f"""
+            **Confidential Ground Truth**:
+            - **Benchmark Price**: `${BENCHMARK_PRICE:.2f}` (80 visitors)
+            - **Formula**: `max(0, 1.0 - 0.04 * (Price - 15))`
+            - **Sweet Spot**: `$20.00 – $22.50`
+            - **Luxury Trap**: `> $35.00` (0 visitors)
+            - **Bargain Basement**: `< $8.00`
+            """)
     
     chart_col1, chart_col2 = st.columns(2)
     
