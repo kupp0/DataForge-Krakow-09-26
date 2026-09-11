@@ -472,20 +472,17 @@ The central event leaderboard evaluates your park revenue based on real-world **
   * Discounting too heavily leaves massive money on the table (*Bargain Basement* badge).
 * **The Challenge**: Prompt your AI agent to reason about capacity, throughput, and elasticity to find the optimal pricing equilibrium that maximizes total park revenue!
 
-### 3. Scale Spanner Compute to Eliminate Bottlenecks
+### 3. The Park Architect's Dilemma: Throughput vs. CPU Meltdown
 
 By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node).
-* **The Throughput Bottleneck**: A high-concurrency ingestion script will saturate 100 PUs at 100% CPU, causing Spanner to throttle writes and drop requests.
-* **Elastic Scaling**: Scale compute capacity directly via CLI (or let `agy` automate it in the next step):
+* **The Throughput Bottleneck**: A high-concurrency ingestion script will rapidly saturate 100 PUs at 100% CPU. When saturated, Spanner begins queuing requests, increasing write latencies and triggering the **🔥 Spanner Meltdown** badge.
+* **The Scaling Lever**: Watch the live event leaderboard. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more capacity. You can dynamically scale Spanner at any time via the Cloud SDK:
   ```bash
-  # Scale to 500 Processing Units (0.5 Node)
-  gcloud spanner instances update disneyland --processing-units=500
-
-  # Or scale to 1 Full Node (1,000 PUs) for maximum write throughput
-  gcloud spanner instances update disneyland --processing-units=1000
+  # Scale to whatever capacity your park demands (e.g., 300, 500, 800, 1000 PUs)
+  gcloud spanner instances update disneyland --processing-units=<YOUR_TARGET_PUS>
   ```
 > [!TIP]
-> **Leaderboard Rewards**: The live dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**, awarding bonus points and unlocking the ⚡ **Hyperscale Operator** and 🚀 **Throughput Titan** badges!
+> **Leaderboard Strategy**: The central dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**. Scaling beyond the baseline awards bonus points and unlocks the **⚡ Hyperscale Operator** ($\ge$ 500 PUs) and **🚀 Throughput Titan** ($\ge$ 100 runs/sec) badges!
 
 ### 4. Prompt `agy` in your Workstation VM to Build & Run a High-Throughput Load Test
 
@@ -496,10 +493,9 @@ agy --dangerously-skip-permissions "Create and execute a high-throughput multi-t
 The script should:
 1. Connect to Spanner instance 'disneyland' and database 'agent-lab' using google-cloud-spanner.
 2. Read the existing Attraction IDs from the 'Attraction' table.
-3. Check Spanner instance capacity (processing units). If compute is still at 100 PUs, scale it up to 500 PUs or 1,000 PUs via gcloud or the Spanner Instance API.
-4. Using concurrent worker threads and batch mutations (e.g. 5,000 to 10,000 total runs), commit AttractionRun records with PENDING_COMMIT_TIMESTAMP().
-5. Pick optimal ticket prices within the realistic $10.00 to $30.00 market window to maximize park gross revenue under price elasticity.
-6. Measure and log sustained write throughput (runs/sec) and commit latency."
+3. In parallel batches of mutations (target: 5,000 to 10,000 total runs across concurrent worker threads), commit AttractionRun records with PENDING_COMMIT_TIMESTAMP().
+4. Pick optimal ticket prices within the realistic $10.00 to $30.00 market window to maximize park gross revenue under price elasticity.
+5. Benchmark write throughput (runs/sec) and latency. If Spanner CPU saturates or write latency climbs, adapt your batching strategy or advise on compute scaling."
 ```
 
 With `--dangerously-skip-permissions`, `agy` will generate the implementation plan and execute the load test autonomously without pausing for manual approvals.
