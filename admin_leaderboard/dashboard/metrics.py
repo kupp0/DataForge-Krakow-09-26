@@ -58,14 +58,15 @@ def parse_projects_mapping(admin_project_id: str = "dataforge26krk-6725") -> Lis
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 4:
                 proj_id, member, region, city = parts[0], parts[1], parts[2], parts[3]
-                if proj_id == admin_project_id:
-                    continue  # Admin project, exclude from participants
+                is_admin = (proj_id == admin_project_id)
+                display_city = f"{city} (Facilitator)" if is_admin else city
                 participants.append({
                     "project_id": proj_id,
                     "member": member,
                     "region": region,
-                    "city": city,
-                    "short_id": proj_id.split("-")[-1] if "-" in proj_id else proj_id
+                    "city": display_city,
+                    "short_id": proj_id.split("-")[-1] if "-" in proj_id else proj_id,
+                    "is_facilitator": is_admin
                 })
     return participants
 

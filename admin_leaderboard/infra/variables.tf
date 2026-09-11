@@ -49,7 +49,8 @@ variable "participant_projects" {
     "dataforge26krk-6721",
     "dataforge26krk-6722",
     "dataforge26krk-6723",
-    "dataforge26krk-6724"
+    "dataforge26krk-6724",
+    "dataforge26krk-6725"
   ]
 }
 

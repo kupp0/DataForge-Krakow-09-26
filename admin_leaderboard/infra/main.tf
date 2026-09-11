@@ -159,7 +159,8 @@ resource "google_bigquery_table" "v_participant_tables_summary" {
         SELECT 'dataforge26krk-6721' AS project_id, 'Prague' AS city, 'spanner_user_6721' AS dataset_id UNION ALL
         SELECT 'dataforge26krk-6722' AS project_id, 'Dublin' AS city, 'spanner_user_6722' AS dataset_id UNION ALL
         SELECT 'dataforge26krk-6723' AS project_id, 'Oslo' AS city, 'spanner_user_6723' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6724' AS project_id, 'Copenhagen' AS city, 'spanner_user_6724' AS dataset_id
+        SELECT 'dataforge26krk-6724' AS project_id, 'Copenhagen' AS city, 'spanner_user_6724' AS dataset_id UNION ALL
+        SELECT 'dataforge26krk-6725' AS project_id, 'Helsinki (Facilitator)' AS city, 'spanner_user_6725' AS dataset_id
       ),
       tables AS (
         SELECT 
