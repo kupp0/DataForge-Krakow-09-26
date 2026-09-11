@@ -8,6 +8,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 
+import importlib
+import metrics
+import business_rules
+importlib.reload(metrics)
+importlib.reload(business_rules)
 from metrics import get_leaderboard_snapshot
 from business_rules import BENCHMARK_PRICE, calculate_elasticity_demand
 
