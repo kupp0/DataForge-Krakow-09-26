@@ -29,27 +29,33 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     continue
   fi
 
-  IFS=',' read -r PROJ_ID USER_EMAIL REGION <<< "$clean_line"
+  # Explicitly extract fields by delimiter to avoid packing trailing columns
+  PROJ_ID="$(echo "$clean_line" | cut -d',' -f1)"
+  REGION="$(echo "$clean_line" | cut -d',' -f3)"
   REGION="${REGION:-$DEFAULT_REGION}"
 
   if [[ -z "$PROJ_ID" ]]; then
     continue
   fi
 
-  ((COUNT++))
+  COUNT=$((COUNT + 1))
   echo "  ⚡ [${PROJ_ID}] Triggering async startup (region: ${REGION})..."
 
-  gcloud workstations start "$WORKSTATION_ID" \
-    --cluster="$CLUSTER_ID" \
-    --config="$CONFIG_ID" \
-    --region="$REGION" \
-    --project="$PROJ_ID" \
-    --async &>/dev/null &
+  (
+    if ! err=$(gcloud workstations start "$WORKSTATION_ID" \
+      --cluster="$CLUSTER_ID" \
+      --config="$CONFIG_ID" \
+      --region="$REGION" \
+      --project="$PROJ_ID" \
+      --async 2>&1); then
+      echo "  ❌ [${PROJ_ID}] Failed to trigger: $err"
+    fi
+  ) &
   
   PIDS+=($!)
 
-  # Throttle to max 20 parallel processes
-  if (( ${#PIDS[@]} >= 20 )); then
+  # Throttle to max 25 parallel background processes
+  if (( ${#PIDS[@]} >= 25 )); then
     for pid in "${PIDS[@]}"; do
       wait "$pid" 2>/dev/null || true
     done
@@ -64,5 +70,4 @@ done
 
 echo "================================================================="
 echo "✔ Successfully signaled pre-warming for ${COUNT} workstation(s)!"
-echo "  Persistent disks and python virtual environments are hydrating."
 echo "================================================================="
