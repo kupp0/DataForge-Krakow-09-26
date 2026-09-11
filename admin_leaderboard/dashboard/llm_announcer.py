@@ -1,84 +1,111 @@
 """
-Disneyland Spanner Hackathon: Live AI Park Announcer
-Generates motivational, witty flash commentary broadcasts via Gemini 3.8 Flash
-based on real-time leaderboard statistics and telemetry.
+Disneyland Spanner Hackathon: Live AI Park Announcer & Roaster
+Generates hilarious, theatrical roast bulletins and 2-line rhymes via Gemini 3.8 Flash
+mocking participant cities based on real-time leaderboard statistics.
 """
 import os
 import json
 import time
+import random
 import urllib.request
 import urllib.error
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_MESSAGES = [
-    "⚡ Attention park operators: Keep those Spanner queries optimized and don't let your CPU spike into Tomorrowland!",
-    "🏰 The magic is compiling! Leading parks are pushing hyperscale throughput—scale your processing units to stay in the race!",
-    "🚀 Main Street throughput is heating up! Remember to interleave your AttractionRun tables to avoid lock contention!",
-    "🎢 High roller alert: Balance your ticket elasticity! Lower prices boost volume, but watch your Spanner compute capacity!",
-    "✨ Pixie dust won't fix a 90% CPU meltdown—scale up to 500 PUs before the crowds overwhelm your rides!"
+FALLBACK_ROASTS = [
+    {
+        "target_city": "London",
+        "emoji": "🌧️",
+        "roast": "London’s Spanner instance has lower throughput than the line for Peter Pan's Flight in a downpour.",
+        "rhyme": "Big Ben stopped ticking while your nodes fell asleep,\nWith zero transactions, even Mickey had to weep!"
+    },
+    {
+        "target_city": "Tokyo",
+        "emoji": "🔥",
+        "roast": "Tokyo is redlining their CPU so hard that Space Mountain is legally classified as an active volcano.",
+        "rhyme": "Your queries are blazing, your CPU is pure heat,\nScale up your PUs or face catastrophic defeat!"
+    },
+    {
+        "target_city": "Paris",
+        "emoji": "🥐",
+        "roast": "Paris is taking a 2-hour café break while their Spanner property graph remains completely unbuilt.",
+        "rhyme": "You ordered a croissant and forgot about your graph,\nNow the other twenty-four parks are having a good laugh!"
+    },
+    {
+        "target_city": "Berlin",
+        "emoji": "🎛️",
+        "roast": "Berlin spent forty minutes tuning their database schema to techno beats without inserting a single row.",
+        "rhyme": "The bass is pumping loud but the table has no data,\nYou can party at Berghain, but you'll fail the hackathon later!"
+    },
+    {
+        "target_city": "Sydney",
+        "emoji": "🦘",
+        "roast": "Sydney's throughput is bouncing like a startled kangaroo, but their error rate is doing triple flips.",
+        "rhyme": "Down under you're pushing ten thousand requests a minute,\nToo bad half of your transactions don't have any rows in it!"
+    }
 ]
 
-def _extract_telemetry_digest(leaderboard_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compresses 25 projects into key narrative bullet points for the LLM."""
-    if not leaderboard_data:
-        return {"status": "No active telemetry yet"}
-
-    sorted_by_score = sorted(leaderboard_data, key=lambda x: x.get("score", 0), reverse=True)
-    leader = sorted_by_score[0] if sorted_by_score else {}
-    top3 = [{"city": r.get("city"), "score": r.get("score"), "rev": r.get("revenue"), "qps": r.get("qps", 0)} for r in sorted_by_score[:3]]
-
-    # Highest throughput
-    max_qps_city = max(leaderboard_data, key=lambda x: x.get("qps", 0))
-    # Highest CPU
-    max_cpu_city = max(leaderboard_data, key=lambda x: x.get("cpu_utilization_pct", 0))
-    # Cities without property graph yet
-    pending_graphs = [r.get("city") for r in leaderboard_data if not r.get("has_graph", False)]
-    # Total revenue
-    total_rev = sum(r.get("revenue", 0) for r in leaderboard_data)
-
-    return {
-        "leader": {"city": leader.get("city"), "score": leader.get("score"), "revenue": round(leader.get("revenue", 0), 2)},
-        "top3": top3,
-        "max_throughput": {"city": max_qps_city.get("city"), "qps": round(max_qps_city.get("qps", 0), 1)},
-        "max_cpu": {"city": max_cpu_city.get("city"), "cpu_pct": round(max_cpu_city.get("cpu_utilization_pct", 0), 1)},
-        "pending_graphs_count": len(pending_graphs),
-        "pending_graph_sample": pending_graphs[:3],
-        "total_revenue": round(total_rev, 2),
-        "total_parks": len(leaderboard_data)
-    }
-
-def generate_flash_commentary(
+def generate_roast_broadcast(
     leaderboard_data: List[Dict[str, Any]], 
     admin_project_id: str = "dataforge26krk-6725",
     model: str = "gemini-3.8-flash"
-) -> Tuple[str, str, str]:
+) -> Dict[str, Any]:
     """
-    Calls Gemini 3.8 Flash to generate a 1-2 sentence real-time motivational broadcast.
-    Returns: (commentary_text, timestamp, status_label)
+    Calls Gemini 3.8 Flash to pick one participant city to roast with a witty joke and 2-line rhyme.
+    Returns: dict with target_city, emoji, roast, rhyme, timestamp, model
     """
     now_str = time.strftime("%H:%M:%S")
-    digest = _extract_telemetry_digest(leaderboard_data)
+    
+    if not leaderboard_data:
+        fallback = random.choice(FALLBACK_ROASTS)
+        fallback.update({"timestamp": now_str, "model": "Offline Fallback"})
+        return fallback
 
-    # Prompt Engineering
-    prompt_text = f"""You are the electrifying, witty, high-energy live stadium announcer for the Global Disneyland Cloud Spanner Hackathon.
-Analyze this real-time telemetry snapshot:
-{json.dumps(digest, indent=2)}
+    # Compress participant data for prompt context
+    participants_summary = []
+    for r in leaderboard_data:
+        participants_summary.append({
+            "city": r.get("city", "Unknown"),
+            "score": r.get("score", 0),
+            "rev": round(r.get("revenue", 0), 2),
+            "cpu": round(r.get("cpu_utilization_pct", 0), 1),
+            "qps": round(r.get("qps", 0), 1),
+            "has_graph": r.get("has_graph", False),
+            "pus": r.get("processing_units", 100)
+        })
 
-Generate a 1 to 2 sentence high-octane motivational flash bulletin for the live leaderboard broadcast banner.
-Rules:
-- Shout out the leader or rising stars.
-- If CPU for any city is > 70%, warn them about imminent meltdown or advise scaling PUs!
-- If throughput (QPS) is huge, celebrate the Throughput Titan.
-- Urge cities without graphs to deploy their Spanner Graph DDL immediately.
-- Use fun Disney/theme-park and cloud/database puns (Space Mountain, pixie dust, PUs, ACID, lock contention, Main Street).
-- Do NOT output preamble, quotes, markdown headings, or bullet points. Just output the clean broadcast string."""
+    prompt_text = f"""You are the roasting, hilarious, and theatrical Disney Park Stadium Jester at the Global Spanner Hackathon.
+Inspect the real-time leaderboard statistics for these participant parks:
+{json.dumps(participants_summary, indent=2)}
+
+Task:
+1. Pick ONE city from the list to playfully roast or mock based on their specific numbers:
+   - If their CPU is high (>70%), mock them for melting down Space Mountain or running an easy-bake oven.
+   - If their score or rows are near zero, tease them for sleeping on Main Street or taking a union break.
+   - If they are #1, playfully accuse them of bribing the fairy godmother with counterfeit Disney dollars.
+   - If they lack a property graph, roast them for getting lost in Fantasyland without a map.
+   - If their throughput (QPS) is wild, wonder if they hooked their laptop to the park's primary power grid.
+2. Produce a sharp, hilarious 1-sentence roast joke.
+3. Produce a funny, catchy 2-line rhyming couplet about that specific city's engineering performance.
+Rule: Never use double quotes inside the roast or rhyme text (use single quotes 'like this' instead).
+
+Respond ONLY with valid JSON in this exact structure:
+{{
+  "target_city": "ExactCityName",
+  "emoji": "🎭",
+  "roast": "1 razor-sharp hilarious sentence mocking their performance",
+  "rhyme_lines": [
+    "First line of the funny rhyme",
+    "Second line of the funny rhyme"
+  ]
+}}"""
 
     try:
         import google.auth
         from google.auth.transport.requests import Request
+        import re
 
         creds, proj = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         creds.refresh(Request())
@@ -95,7 +122,8 @@ Rules:
                 }
             ],
             "generationConfig": {
-                "temperature": 0.85,
+                "responseMimeType": "application/json",
+                "temperature": 0.95,
                 "maxOutputTokens": 1000
             }
         }
@@ -112,30 +140,54 @@ Rules:
         with urllib.request.urlopen(req, timeout=12) as response:
             res_data = json.loads(response.read().decode("utf-8"))
             candidate = res_data.get("candidates", [{}])[0]
-            parts = candidate.get("content", {}).get("parts", [{}])
-            text = parts[0].get("text", "").strip()
-            # Clean up outer quotes if present
-            if text.startswith('"') and text.endswith('"'):
-                text = text[1:-1].strip()
+            parts = candidate.get("content", {}).get("parts", [])
+            text = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
             
-            if text:
-                return text, now_str, f"Gemini 3.8 Flash ({model})"
+            # Clean markdown codeblocks if present
+            if text.startswith("```"):
+                lines = text.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                text = "\n".join(lines).strip()
+
+            parsed = None
+            try:
+                parsed = json.loads(text, strict=False)
+            except Exception:
+                # Regex fallback extractor
+                t_match = re.search(r'"target_city"\s*:\s*"([^"]+)"', text)
+                r_match = re.search(r'"roast"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+                e_match = re.search(r'"emoji"\s*:\s*"([^"]+)"', text)
+                rhyme_matches = re.findall(r'"([^"\n\r]{10,})"', text.split("rhyme_lines")[-1]) if "rhyme_lines" in text else []
+                if t_match and r_match:
+                    parsed = {
+                        "target_city": t_match.group(1),
+                        "emoji": e_match.group(1) if e_match else "🎭",
+                        "roast": r_match.group(1),
+                        "rhyme_lines": rhyme_matches[:2]
+                    }
+
+            if parsed and "target_city" in parsed and "roast" in parsed:
+                rhyme = "\n".join(parsed.get("rhyme_lines", [])) if "rhyme_lines" in parsed else parsed.get("rhyme", "")
+                parsed["rhyme"] = rhyme
+                parsed["timestamp"] = now_str
+                parsed["model"] = "Gemini 3.8 Flash"
+                return parsed
 
     except Exception as e:
-        logger.warning(f"LLM broadcast generation fallback: {e}")
+        logger.warning(f"LLM roast generation fallback: {e}")
 
-    # Fallback to dynamic template if LLM is unreachable or timed out
-    leader_city = digest.get("leader", {}).get("city", "Leading Park")
-    max_cpu = digest.get("max_cpu", {}).get("cpu_pct", 0)
-    cpu_city = digest.get("max_cpu", {}).get("city", "")
+    # Fallback to rich random selection
+    fallback = dict(random.choice(FALLBACK_ROASTS))
+    fallback["timestamp"] = now_str
+    fallback["model"] = "Dynamic Roaster (Fallback)"
+    return fallback
 
-    if max_cpu >= 75:
-        fallback = f"🔥 Meltdown Alert! {cpu_city} is redlining at {max_cpu}% Spanner CPU—scale those Processing Units before Space Mountain halts!"
-    elif digest.get("pending_graphs_count", 0) > 0:
-        sample = ", ".join(digest.get("pending_graph_sample", []))
-        fallback = f"🏰 {leader_city} is commanding the standings, but {sample} still need to deploy their Spanner Graphs! Time is ticking!"
-    else:
-        import random
-        fallback = random.choice(FALLBACK_MESSAGES)
+# Legacy compatibility wrapper
+def generate_flash_commentary(leaderboard_data, admin_project_id="dataforge26krk-6725", model="gemini-3.8-flash"):
+    roast_data = generate_roast_broadcast(leaderboard_data, admin_project_id, model)
+    combined = f"[{roast_data['target_city']}] {roast_data['roast']} ✨ \"{roast_data['rhyme']}\""
+    return combined, roast_data["timestamp"], roast_data["model"]
 
-    return fallback, now_str, "Dynamic Rules (Offline Fallback)"

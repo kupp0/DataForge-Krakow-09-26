@@ -67,47 +67,130 @@ use_mock_data = st.sidebar.checkbox("Simulation / Mock Mode", value=False, help=
 if st.sidebar.button("🔄 Refresh Data Now"):
     st.cache_data.clear()
 
-if st.sidebar.button("🎙️ Re-generate Flash Commentary"):
-    st.session_state["force_announcer_refresh"] = True
+always_show_roast = st.sidebar.checkbox("Always Show Roast HUD (Preview)", value=False, help="Keep the funny roast HUD visible permanently for testing or demoing")
 
-@st.cache_data(ttl=15)
-def load_snapshot(mock_mode: bool):
-    return get_leaderboard_snapshot(admin_project_id="dataforge26krk-6725", use_mock=mock_mode)
+if st.sidebar.button("🎭 Roast A Park Now (Re-Roll)"):
+    st.session_state["force_roast_refresh"] = True
 
-data = load_snapshot(use_mock_data)
-df = pd.DataFrame(data)
+# 4-Minute Cadence & 1-Minute Active Visibility Engine
+CYCLE_SECONDS = 240   # Every 4 minutes (240s)
+DISPLAY_SECONDS = 60  # Stays on screen for 1 minute (60s)
 
-# Header
-st.title("🎢 Disneyland Spanner Hackathon: Global Leaderboard")
-st.markdown("Real-time telemetry, Spanner performance metrics, and gamified Disneyland park revenue optimization across all participant cities.")
+now_ts = time.time()
+current_cycle_id = int(now_ts) // CYCLE_SECONDS
+elapsed_in_cycle = int(now_ts) % CYCLE_SECONDS
+is_active_window = elapsed_in_cycle < DISPLAY_SECONDS
+remaining_seconds = max(1, DISPLAY_SECONDS - elapsed_in_cycle)
 
-# Live AI Park Announcer Flash Commentary
-force_announcer = st.session_state.pop("force_announcer_refresh", False)
+if is_active_window or always_show_roast:
+    st.sidebar.markdown(f"🎙️ **Live Roast Status**: 🔴 On-Air ({remaining_seconds}s left)")
+else:
+    time_until_next = CYCLE_SECONDS - elapsed_in_cycle
+    mins = time_until_next // 60
+    secs = time_until_next % 60
+    st.sidebar.markdown(f"⏳ **Next Roast In**: `{mins}m {secs:02d}s`")
 
-@st.cache_data(ttl=60)
-def get_cached_flash_commentary(telemetry_data, project_id, bust_token=0):
-    return generate_flash_commentary(telemetry_data, project_id)
+force_roast = st.session_state.pop("force_roast_refresh", False)
 
-if force_announcer:
-    get_cached_flash_commentary.clear()
+@st.cache_data(ttl=CYCLE_SECONDS)
+def get_cached_roast(telemetry_data, project_id, cycle_id):
+    import llm_announcer
+    importlib.reload(llm_announcer)
+    return llm_announcer.generate_roast_broadcast(telemetry_data, project_id)
 
-flash_msg, flash_ts, flash_model = get_cached_flash_commentary(data, "dataforge26krk-6725")
+if force_roast:
+    get_cached_roast.clear()
 
-st.markdown(f"""
-<div style="background: linear-gradient(135deg, #181c24 0%, #281e3a 100%); border-left: 5px solid #ff79c6; border-radius: 8px; padding: 14px 18px; margin: 12px 0 18px 0; box-shadow: 0 4px 14px rgba(0,0,0,0.35);">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-        <span style="font-size: 0.85em; font-weight: bold; color: #ff79c6; letter-spacing: 1px; text-transform: uppercase;">
-            🎙️ Live Park Announcer • {flash_model}
+roast = get_cached_roast(data, "dataforge26krk-6725", current_cycle_id)
+
+# Render Hover Flashy Message HUD if in active 1-minute window or toggled on
+if is_active_window or always_show_roast or force_roast:
+    target_city = roast.get("target_city", "Contenders")
+    emoji = roast.get("emoji", "🎪")
+    joke = roast.get("roast", "")
+    rhyme_lines = roast.get("rhyme", "").split("\n")
+    rhyme_html = "<br/>".join([f"✨ <em>{l.strip()}</em>" for l in rhyme_lines if l.strip()])
+    model_name = roast.get("model", "Gemini 3.8 Flash")
+    roast_ts = roast.get("timestamp", time.strftime("%H:%M:%S"))
+
+    st.markdown(f"""
+    <style>
+    @keyframes neonGlow {{
+      0% {{ box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 15px rgba(255, 121, 198, 0.4); border-color: #ff79c6; }}
+      50% {{ box-shadow: 0 12px 35px rgba(0, 0, 0, 0.8), 0 0 25px rgba(189, 147, 249, 0.6); border-color: #bd93f9; }}
+      100% {{ box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 15px rgba(255, 121, 198, 0.4); border-color: #ff79c6; }}
+    }}
+
+    @keyframes progressShrink {{
+      from {{ width: 100%; }}
+      to {{ width: 0%; }}
+    }}
+
+    .roast-floating-card {{
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 440px;
+      max-width: 90vw;
+      background: linear-gradient(135deg, #181926 0%, #281e3a 100%);
+      border: 2px solid #ff79c6;
+      border-radius: 12px;
+      padding: 18px 20px;
+      z-index: 999999;
+      color: #f8f8f2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      animation: neonGlow 3s infinite ease-in-out;
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+      backdrop-filter: blur(12px);
+    }}
+
+    .roast-floating-card:hover {{
+      transform: translateY(-6px) scale(1.02);
+      box-shadow: 0 16px 45px rgba(0, 0, 0, 0.8), 0 0 35px rgba(255, 121, 198, 0.85) !important;
+    }}
+
+    .roast-floating-card:hover .roast-timer-bar {{
+      animation-play-state: paused !important;
+    }}
+
+    .rhyme-box {{
+      background: rgba(255, 215, 0, 0.08);
+      border-left: 3px solid #ffd700;
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin: 12px 0 10px 0;
+      font-family: 'Georgia', serif;
+      color: #f1fa8c;
+      font-size: 0.95em;
+      line-height: 1.45;
+    }}
+    </style>
+
+    <div class="roast-floating-card" id="roastCard">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-size: 0.78em; font-weight: 800; color: #ff79c6; letter-spacing: 1.2px; text-transform: uppercase;">
+          🎪 LIVE ROAST BULLETIN • {model_name}
         </span>
-        <span style="font-size: 0.8em; color: #8be9fd; font-family: monospace;">
-            ⏱️ {flash_ts}
-        </span>
+        <span style="font-size: 0.75em; color: #8be9fd; font-family: monospace;">⏱️ {roast_ts}</span>
+      </div>
+      <div style="display: inline-block; background: #44475a; color: #50fa7b; font-size: 0.82em; font-weight: bold; padding: 2px 10px; border-radius: 12px; margin-bottom: 8px;">
+        🎯 TARGET: {target_city.upper()} {emoji}
+      </div>
+      <div style="font-size: 1.05em; color: #f8f8f2; line-height: 1.45; margin-bottom: 6px;">
+        "{joke}"
+      </div>
+      <div class="rhyme-box">
+        {rhyme_html}
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75em; color: #8be9fd;">
+        <span>⏱️ On-Air for {remaining_seconds}s (Hover to pause)</span>
+        <span style="color: #6272a4;">Every 4 mins</span>
+      </div>
+      <div style="height: 4px; width: 100%; background: #282a36; border-radius: 2px; margin-top: 6px; overflow: hidden;">
+        <div class="roast-timer-bar" style="height: 100%; width: 100%; background: linear-gradient(90deg, #ff79c6, #bd93f9); animation: progressShrink {remaining_seconds}s linear forwards;"></div>
+      </div>
     </div>
-    <div style="font-size: 1.1em; color: #f8f8f2; font-style: italic; line-height: 1.45;">
-        "{flash_msg}"
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
 # Summary Metrics Row
 col1, col2, col3, col4, col5 = st.columns(5)
