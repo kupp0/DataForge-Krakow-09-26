@@ -231,7 +231,7 @@ fi
         python3 -m venv "$LAB2_DIR/venv"
         "$LAB2_DIR/venv/bin/pip" install --no-cache-dir --upgrade pip || true
         "$LAB2_DIR/venv/bin/pip" install --no-cache-dir \
-            fastapi uvicorn google-cloud-spanner google-genai google-adk pydantic requests
+            fastapi uvicorn google-cloud-spanner google-genai google-adk mcp pydantic requests
         chown -R 1000:1000 "$LAB2_DIR/venv" 2>/dev/null || true
         touch "$LAB2_DIR/.venv_ready"
         echo "[$(date)] Lab 02 Python virtual environment successfully hydrated."

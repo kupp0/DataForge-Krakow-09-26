@@ -107,7 +107,7 @@ async def ask_disneyland_agent(user_message: str, session_id: str = "guest_sessi
     
     message = Content(role="user", parts=[Part(text=user_message)])
     response_text = ""
-    async for event in runner.run_stream(user_id=user_id, session_id=session_id, message=message):
+    async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=message):
         if hasattr(event, "content") and event.content:
             for part in event.content.parts:
                 if hasattr(part, "text") and part.text:
