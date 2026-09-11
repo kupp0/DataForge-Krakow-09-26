@@ -108,6 +108,23 @@ FROM GRAPH_TABLE({GRAPH_NAME}
 
 ---
 
+## 4. Application Integration (Python SDKs)
+
+* **Direct Data Endpoints (`/api/navigate`, `/api/paths`, `/api/attractions`)**:
+  Execute SQL and GQL queries directly using the official `google.cloud.spanner` client library for sub-millisecond, deterministic responses:
+  ```python
+  from google.cloud import spanner
+  client = spanner.Client(project=PROJECT_ID)
+  db = client.instance("disneyland").database("agent-lab")
+  with db.snapshot() as snapshot:
+      results = list(snapshot.execute_sql(gql_query))
+  ```
+
+* **Conversational AI Agent Endpoint (`/api/chat`)**:
+  Refer to `vertex-config` skill for the verified `google.adk` Agent and Runner pattern, supplying a `query_spanner` tool to avoid schema serialization overhead.
+
+---
+
 ## Execution Guidelines
 
 * **Zero Hallucination Constraints:** Treat capitalized terms (`CREATE PROPERTY GRAPH`, `NODE TABLES`, `EDGE TABLES`, `MATCH GRAPH_PATH`) as reserved structural constants.

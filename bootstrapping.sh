@@ -222,8 +222,14 @@ fi
 (
     LAB2_DIR="/home/user/labs/lab02_spanner_disneyland"
     if [[ -d "$LAB2_DIR" ]]; then
+        echo "[$(date)] Ensuring system python3-venv and python3-pip packages are installed..."
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq && apt-get install -y -qq python3-venv python3-pip python3.12-venv || true
+
         echo "[$(date)] Initializing Python virtual environment for Lab 02..."
+        rm -rf "$LAB2_DIR/venv"
         python3 -m venv "$LAB2_DIR/venv"
+        "$LAB2_DIR/venv/bin/pip" install --no-cache-dir --upgrade pip || true
         "$LAB2_DIR/venv/bin/pip" install --no-cache-dir \
             fastapi uvicorn google-cloud-spanner google-genai google-adk pydantic requests
         chown -R 1000:1000 "$LAB2_DIR/venv" 2>/dev/null || true
