@@ -11,10 +11,13 @@ import time
 import importlib
 import metrics
 import business_rules
+import llm_announcer
 importlib.reload(metrics)
 importlib.reload(business_rules)
+importlib.reload(llm_announcer)
 from metrics import get_leaderboard_snapshot
 from business_rules import BENCHMARK_PRICE, calculate_elasticity_demand
+from llm_announcer import generate_flash_commentary
 
 # Streamlit Page Config
 st.set_page_config(
@@ -64,6 +67,9 @@ use_mock_data = st.sidebar.checkbox("Simulation / Mock Mode", value=False, help=
 if st.sidebar.button("🔄 Refresh Data Now"):
     st.cache_data.clear()
 
+if st.sidebar.button("🎙️ Re-generate Flash Commentary"):
+    st.session_state["force_announcer_refresh"] = True
+
 @st.cache_data(ttl=15)
 def load_snapshot(mock_mode: bool):
     return get_leaderboard_snapshot(admin_project_id="dataforge26krk-6725", use_mock=mock_mode)
@@ -74,6 +80,34 @@ df = pd.DataFrame(data)
 # Header
 st.title("🎢 Disneyland Spanner Hackathon: Global Leaderboard")
 st.markdown("Real-time telemetry, Spanner performance metrics, and gamified Disneyland park revenue optimization across all participant cities.")
+
+# Live AI Park Announcer Flash Commentary
+force_announcer = st.session_state.pop("force_announcer_refresh", False)
+
+@st.cache_data(ttl=60)
+def get_cached_flash_commentary(telemetry_data, project_id, bust_token=0):
+    return generate_flash_commentary(telemetry_data, project_id)
+
+if force_announcer:
+    get_cached_flash_commentary.clear()
+
+flash_msg, flash_ts, flash_model = get_cached_flash_commentary(data, "dataforge26krk-6725")
+
+st.markdown(f"""
+<div style="background: linear-gradient(135deg, #181c24 0%, #281e3a 100%); border-left: 5px solid #ff79c6; border-radius: 8px; padding: 14px 18px; margin: 12px 0 18px 0; box-shadow: 0 4px 14px rgba(0,0,0,0.35);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 0.85em; font-weight: bold; color: #ff79c6; letter-spacing: 1px; text-transform: uppercase;">
+            🎙️ Live Park Announcer • {flash_model}
+        </span>
+        <span style="font-size: 0.8em; color: #8be9fd; font-family: monospace;">
+            ⏱️ {flash_ts}
+        </span>
+    </div>
+    <div style="font-size: 1.1em; color: #f8f8f2; font-style: italic; line-height: 1.45;">
+        "{flash_msg}"
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # Summary Metrics Row
 col1, col2, col3, col4, col5 = st.columns(5)
