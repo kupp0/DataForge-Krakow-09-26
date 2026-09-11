@@ -1,6 +1,6 @@
 ---
 name: vertex-config
-description: Provides explicit, verified guidelines for configuring google-adk agents to connect to Google Cloud Vertex AI APIs, resolve project/credential dependencies, and select active models under the DACH Summit workshop sandbox.
+description: Provides explicit, verified guidelines for configuring google-adk agents to connect to Google Cloud Vertex AI APIs, resolve project/credential dependencies, and select active models under the DataForge Krakow workshop sandbox.
 ---
 # GCP Vertex AI Model & Credentials Configuration
 
@@ -43,7 +43,7 @@ os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "true"
 ## 2. Verified Model Selection
 When running in GCP Vertex AI mode, use this active model identifier:
 
-- **Primary Model:** `gemini-3.5-flash`
+- **Primary Model:** `gemini-3.8-flash`
 
 ---
 
@@ -54,9 +54,9 @@ Implement the `Agent` configuration inside the backend Python application using 
 from google.adk.agents import Agent
 
 agent = Agent(
-    name="property_agent",
-    model="gemini-3.5-flash",  # Verified Vertex AI model name
-    description="Agent configured to answer database questions.",
+    name="disneyland_agent",
+    model="gemini-3.8-flash",  # Verified Vertex AI model name
+    description="Agent configured to answer database and attraction route questions.",
     instruction=system_instruction,
     tools=tools,               # List of loaded MCP tools
 )

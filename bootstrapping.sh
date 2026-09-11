@@ -217,7 +217,22 @@ fi
 EOF
 fi
 
-# --- 4. Clean Up and Fix Permissions ---
+# --- 4. Asynchronous Background Virtual Environment Pre-warming ---
+# Run in background subshell to prevent blocking Code-OSS container startup
+(
+    LAB2_DIR="/home/user/labs/lab02_spanner_disneyland"
+    if [[ -d "$LAB2_DIR" ]]; then
+        echo "[$(date)] Initializing Python virtual environment for Lab 02..."
+        python3 -m venv "$LAB2_DIR/venv"
+        "$LAB2_DIR/venv/bin/pip" install --no-cache-dir \
+            fastapi uvicorn google-cloud-spanner google-genai google-adk pydantic requests
+        chown -R 1000:1000 "$LAB2_DIR/venv" 2>/dev/null || true
+        touch "$LAB2_DIR/.venv_ready"
+        echo "[$(date)] Lab 02 Python virtual environment successfully hydrated."
+    fi
+) >> /home/user/venv_bootstrap.log 2>&1 &
+
+# --- 5. Clean Up and Fix Permissions ---
 echo "🧹 Cleaning up temporary git clone..."
 rm -rf "$TEMP_CLONE_DIR"
 

@@ -445,6 +445,27 @@ def run_post_apply_patches(project_id, region, log_file):
         else:
             f.write("No AlloyDB cluster found in deployment. Skipping Data API patch.\n")
 
+def prewarm_workstation_async(project_id, region, log_file):
+    """Initiates asynchronous startup of the Cloud Workstation to pre-warm container, code, and virtualenv."""
+    logging.info(f"[{project_id}] Triggering asynchronous Cloud Workstation startup for pre-warming...")
+    with open(log_file, "a") as f:
+        f.write("\n=== STEP 4: PRE-WARMING CLOUD WORKSTATION ===\n")
+        cmd = [
+            "gcloud", "workstations", "start", "my-workstation",
+            "--cluster=workstation-cluster",
+            "--config=workstation-config",
+            f"--region={region}",
+            f"--project={project_id}",
+            "--async"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode == 0:
+            f.write(f"Workstation pre-warming triggered asynchronously.\n{res.stdout}\n")
+            logging.info(f"[{project_id}] Workstation pre-warming triggered successfully.")
+        else:
+            f.write(f"⚠️ Workstation pre-warm warning (non-fatal): {res.stderr.strip()}\n")
+            logging.warning(f"[{project_id}] Workstation pre-warm warning: {res.stderr.strip()}")
+
 def run_local_terraform_apply(project, builds, index):
     """Executes a local Terraform init & apply in an isolated workspace for a single project."""
     project_id = project["project_id"]
@@ -563,6 +584,10 @@ def run_local_terraform_apply(project, builds, index):
         # Step 3: Run Post-Apply Patches (AlloyDB Data API)
         builds[index]["status"] = "POST_PATCH"
         run_post_apply_patches(project_id, region, log_file_path)
+        
+        # Step 4: Pre-warm Cloud Workstation
+        builds[index]["status"] = "PREWARM"
+        prewarm_workstation_async(project_id, region, log_file_path)
         
         builds[index]["status"] = "SUCCESS"
         shutil.rmtree(workdir, ignore_errors=True)
@@ -724,7 +749,7 @@ def run_live_dashboard(builds, is_destroy=False):
         queued = sum(1 for b in builds if b["status"] == "QUEUED")
         init = sum(1 for b in builds if b["status"] == "INIT")
         apply_or_destroy = sum(1 for b in builds if b["status"] in ("APPLY", "DESTROY"))
-        patch_or_cleanup = sum(1 for b in builds if b["status"] in ("POST_PATCH", "CLEANUP"))
+        patch_or_cleanup = sum(1 for b in builds if b["status"] in ("POST_PATCH", "CLEANUP", "PREWARM"))
         success = sum(1 for b in builds if b["status"] in ("SUCCESS", "DESTROYED"))
         failed = sum(1 for b in builds if b["status"].startswith("FAILED") or b["status"].startswith("PREREQ_FAILED"))
         
@@ -740,7 +765,7 @@ def run_live_dashboard(builds, is_destroy=False):
         if is_destroy:
             print(f"  {COLOR_GRAY}Queued: {queued}{COLOR_RESET} | {COLOR_CYAN}Init: {init}{COLOR_RESET} | {COLOR_YELLOW}Destroy: {apply_or_destroy}{COLOR_RESET} | {COLOR_YELLOW}Cleanup: {patch_or_cleanup}{COLOR_RESET} | {COLOR_GREEN}Destroyed: {success}{COLOR_RESET} | {COLOR_RED}Failed: {failed}{COLOR_RESET}")
         else:
-            print(f"  {COLOR_GRAY}Queued: {queued}{COLOR_RESET} | {COLOR_CYAN}Init: {init}{COLOR_RESET} | {COLOR_YELLOW}Apply: {apply_or_destroy}{COLOR_RESET} | {COLOR_YELLOW}Patch: {patch_or_cleanup}{COLOR_RESET} | {COLOR_GREEN}Success: {success}{COLOR_RESET} | {COLOR_RED}Failed: {failed}{COLOR_RESET}")
+            print(f"  {COLOR_GRAY}Queued: {queued}{COLOR_RESET} | {COLOR_CYAN}Init: {init}{COLOR_RESET} | {COLOR_YELLOW}Apply: {apply_or_destroy}{COLOR_RESET} | {COLOR_YELLOW}Pre-warm: {patch_or_cleanup}{COLOR_RESET} | {COLOR_GREEN}Success: {success}{COLOR_RESET} | {COLOR_RED}Failed: {failed}{COLOR_RESET}")
         print("=================================================================")
         print(f"{COLOR_BOLD}{'PROJECT ID':<25} | {'PARTICIPANT':<25} | {'CURRENT STEP / STATUS':<25}{COLOR_RESET}")
         print("-----------------------------------------------------------------")
@@ -748,7 +773,7 @@ def run_live_dashboard(builds, is_destroy=False):
         if total <= max_display_rows:
             display_builds = builds
         else:
-            active_statuses = ("INIT", "APPLY", "POST_PATCH", "DESTROY", "CLEANUP")
+            active_statuses = ("INIT", "APPLY", "POST_PATCH", "PREWARM", "DESTROY", "CLEANUP")
             active_builds = [b for b in builds if b["status"] in active_statuses]
             failed_builds = [b for b in builds if b["status"].startswith("FAILED") or b["status"].startswith("PREREQ_FAILED")]
             other_builds = [b for b in builds if b["status"] in ("SUCCESS", "DESTROYED", "QUEUED")]
@@ -776,6 +801,8 @@ def run_live_dashboard(builds, is_destroy=False):
                 status_str = f"{COLOR_YELLOW}⏳ TERRAFORM DESTROY{COLOR_RESET}"
             elif status == "POST_PATCH":
                 status_str = f"{COLOR_YELLOW}⏳ POST-CONFIG PATCH{COLOR_RESET}"
+            elif status == "PREWARM":
+                status_str = f"{COLOR_CYAN}⏳ PRE-WARM WS{COLOR_RESET}"
             elif status == "CLEANUP":
                 status_str = f"{COLOR_YELLOW}⏳ CLEANING STATE{COLOR_RESET}"
             elif status == "QUEUED":
