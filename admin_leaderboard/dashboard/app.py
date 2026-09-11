@@ -122,6 +122,8 @@ with tab_leaderboard:
             "Score": r["score"],
             "Revenue": f"${r['revenue']:,.2f}",
             "Ticket Price": f"${r['ticket_price']:.2f}" if r['ticket_price'] > 0 else "Not set",
+            "Compute": f"{r.get('processing_units', 100)} PUs" if r.get('processing_units', 100) < 1000 else f"{r.get('processing_units', 100)//1000} Node ({r.get('processing_units', 100)} PUs)",
+            "Throughput": f"{r.get('qps', 0.0):.1f} runs/s",
             "Tables": len(r["tables"]),
             "Rows": r["total_rows"],
             "Graph": "✅ Yes" if r["has_graph"] else "⏳ Pending",
@@ -146,19 +148,23 @@ with tab_leaderboard:
 
     # Awards Showcase
     st.markdown("### 🎖️ Hall of Fame & Badges")
-    b_col1, b_col2, b_col3 = st.columns(3)
+    b_col1, b_col2, b_col3, b_col4 = st.columns(4)
     
     # Find award winners
     architects = [r["city"] for r in data if any(b[1] == "Castle Architect" for b in r.get("badges", []))]
+    hyperscalers = [r["city"] for r in data if any(b[1] == "Hyperscale Operator" for b in r.get("badges", []))]
+    titans = [r["city"] for r in data if any(b[1] == "Throughput Titan" for b in r.get("badges", []))]
     meltdowns = [r["city"] for r in data if any(b[1] == "Spanner Meltdown" for b in r.get("badges", []))]
     highest_rev = df.sort_values(by="revenue", ascending=False).iloc[0]["city"] if not df.empty and df["revenue"].max() > 0 else "None"
     
     with b_col1:
         st.info(f"**🏰 Castle Architects**\n\n{', '.join(architects) if architects else 'No city has completed the graph yet.'}")
     with b_col2:
-        st.success(f"**💰 Disney Tycoon of the Day**\n\n🏆 **{highest_rev}** (Top revenue generator)")
+        st.success(f"**💰 Disney Tycoon**\n\n🏆 **{highest_rev}** (Top revenue)")
     with b_col3:
-        st.warning(f"**🔥 Spanner Meltdown (Stress Testers)**\n\n{', '.join(meltdowns) if meltdowns else 'All Spanner instances operating smoothly.'}")
+        st.info(f"**⚡ Hyperscalers (Scaled PUs)**\n\n{', '.join(hyperscalers) if hyperscalers else 'All parks on 100 PUs.'}")
+    with b_col4:
+        st.warning(f"**🔥 Stress Testers (High Load)**\n\n{', '.join(meltdowns) if meltdowns else (', '.join(titans) if titans else 'All Spanner instances quiet.')}")
 
 with tab_business:
     st.subheader("🎢 Price Elasticity & Revenue Optimization")
@@ -215,8 +221,38 @@ with tab_business:
 
 # --- TAB 3: Spanner Telemetry & Load ---
 with tab_spanner:
-    st.subheader("⚡ Spanner Health & CPU Utilization")
+    st.subheader("⚡ Spanner Health, Throughput & Cluster Capacity")
     
+    scale_col1, scale_col2 = st.columns(2)
+    with scale_col1:
+        fig_qps = px.bar(
+            df.sort_values("qps", ascending=False),
+            x="city",
+            y="qps",
+            color="qps",
+            color_continuous_scale="Greens",
+            title="Direct Write Ingestion Throughput (Runs / Sec)",
+            labels={"qps": "Runs/sec", "city": "City"}
+        )
+        fig_qps.add_hline(y=100.0, line_dash="dash", line_color="orange", annotation_text="High Velocity (100 runs/s)")
+        fig_qps.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_qps, use_container_width=True)
+        
+    with scale_col2:
+        fig_pu = px.bar(
+            df.sort_values("processing_units", ascending=False),
+            x="city",
+            y="processing_units",
+            color="processing_units",
+            color_continuous_scale="Purples",
+            title="Spanner Compute Capacity (Processing Units)",
+            labels={"processing_units": "Processing Units (PUs)", "city": "City"}
+        )
+        fig_pu.add_hline(y=100.0, line_dash="dash", line_color="gray", annotation_text="Baseline (100 PUs)")
+        fig_pu.add_hline(y=1000.0, line_dash="dot", line_color="red", annotation_text="1 Full Node (1,000 PUs)")
+        fig_pu.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_pu, use_container_width=True)
+        
     cpu_col1, cpu_col2 = st.columns(2)
     with cpu_col1:
         fig_cpu = px.bar(

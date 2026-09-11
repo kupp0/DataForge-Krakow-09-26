@@ -142,13 +142,15 @@ def fetch_participant_monitoring_metrics(
 
 def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
     """
-    Authoritative, direct Cloud Spanner schema & row count inspection.
+    Authoritative, direct Cloud Spanner schema, row count, compute scale, and throughput inspection.
     """
     tables = []
     has_graph = False
     total_rows = 0
     runs = 0
     ticket_price = 0.0
+    processing_units = 100
+    qps = 0.0
 
     client = get_spanner_client(project_id)
     if not client:
@@ -157,11 +159,20 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
             "total_rows": total_rows,
             "has_graph": has_graph,
             "runs": runs,
-            "ticket_price": ticket_price
+            "ticket_price": ticket_price,
+            "processing_units": processing_units,
+            "qps": qps
         }
 
     try:
-        db = client.instance("disneyland").database("agent-lab")
+        inst = client.instance("disneyland")
+        try:
+            inst.reload()
+            processing_units = inst.processing_units or 100
+        except Exception:
+            processing_units = 100
+
+        db = inst.database("agent-lab")
         with db.snapshot(multi_use=True) as s:
             # 1. Query tables
             tables = [r[0] for r in s.execute_sql(
@@ -181,9 +192,23 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
                     for r in s.execute_sql(f"SELECT COUNT(1) FROM {t}"):
                         total_rows += r[0]
                 elif "attractionrun" in t_lower or "parkrun" in t_lower or "rideexecution" in t_lower:
-                    for r in s.execute_sql(f"SELECT COUNT(1), AVG(TicketPrice) FROM {t}"):
+                    sql_runs = f"""
+                    SELECT 
+                      COUNT(1), 
+                      AVG(TicketPrice),
+                      TIMESTAMP_DIFF(MAX(RunTimestamp), MIN(RunTimestamp), SECOND),
+                      COUNTIF(RunTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE))
+                    FROM {t}
+                    """
+                    for r in s.execute_sql(sql_runs):
                         runs = r[0] or 0
                         ticket_price = float(r[1]) if r[1] is not None else 0.0
+                        duration_sec = r[2] or 0
+                        recent_runs = r[3] or 0
+                        
+                        burst_qps = (runs / max(1, duration_sec)) if duration_sec > 0 and runs > 1 else (float(runs) if runs > 0 and duration_sec == 0 else 0.0)
+                        live_qps = recent_runs / 120.0
+                        qps = round(max(burst_qps, live_qps), 1)
     except Exception:
         # Database might not exist yet or instance not provisioned
         pass
@@ -193,7 +218,9 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
         "total_rows": total_rows,
         "has_graph": has_graph,
         "runs": runs,
-        "ticket_price": ticket_price
+        "ticket_price": ticket_price,
+        "processing_units": processing_units,
+        "qps": qps
     }
 
 def get_leaderboard_snapshot(
@@ -218,6 +245,9 @@ def get_leaderboard_snapshot(
             runs = 10 * val if val >= 4 else 0
             price = 15.0 + (val - 3) * 4.0 if val >= 4 else 0.0
             biz = calculate_attraction_run_metrics(price, runs)
+            pu_tiers = [100, 100, 200, 500, 500, 1000, 1000]
+            mock_pu = pu_tiers[val % len(pu_tiers)]
+            mock_qps = round(val * 24.5, 1) if val >= 4 else 0.0
             rec = {
                 "project_id": proj_id,
                 "city": p["city"],
@@ -230,6 +260,8 @@ def get_leaderboard_snapshot(
                 "storage_mb": storage_mb,
                 "ticket_price": price,
                 "runs": runs,
+                "processing_units": mock_pu,
+                "qps": mock_qps,
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
@@ -274,6 +306,8 @@ def get_leaderboard_snapshot(
                 "storage_mb": mon_metrics["storage_mb"],
                 "ticket_price": spanner_data["ticket_price"],
                 "runs": spanner_data["runs"],
+                "processing_units": spanner_data["processing_units"],
+                "qps": spanner_data["qps"],
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
