@@ -67,6 +67,13 @@ use_mock_data = st.sidebar.checkbox("Simulation / Mock Mode", value=False, help=
 if st.sidebar.button("🔄 Refresh Data Now"):
     st.cache_data.clear()
 
+@st.cache_data(ttl=15)
+def load_snapshot(mock_mode: bool):
+    return get_leaderboard_snapshot(admin_project_id="dataforge26krk-6725", use_mock=mock_mode)
+
+data = load_snapshot(use_mock_data)
+df = pd.DataFrame(data)
+
 always_show_roast = st.sidebar.checkbox("Always Show Roast HUD (Preview)", value=False, help="Keep the funny roast HUD visible permanently for testing or demoing")
 
 if st.sidebar.button("🎭 Roast A Park Now (Re-Roll)"):
