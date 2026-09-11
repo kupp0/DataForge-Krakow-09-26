@@ -66,11 +66,11 @@ def classify_error(error_text):
     """
     err = str(error_text).lower()
     
-    if any(kw in err for kw in ["oauth2: access_denied", "invalid_grant", "restricted", "credentials not found", "application default credentials"]):
+    if any(kw in err for kw in ["oauth2: access_denied", "invalid_grant", "restricted", "credentials not found", "application default credentials", "invalid credentials", "autherror", "access_token_type_unsupported", "error 401"]):
         return (
             "ADC_AUTH_EXPIRED",
             "ADC Expired",
-            "Application Default Credentials (ADC) token missing or restricted.",
+            "Application Default Credentials (ADC) token missing, expired, or restricted.",
             "Run: gcloud auth application-default login"
         )
     if any(kw in err for kw in ["not found", "not_found", "does not exist", "404", "cannot find project"]):
@@ -164,21 +164,24 @@ def check_environment_and_auth():
         print(f"   {COLOR_GREEN}gcloud auth login{COLOR_RESET}\n")
         sys.exit(1)
         
-    # 2. Check active OAuth2 token validity
-    try:
-        token = get_active_oauth_token()
-        if not token:
-            raise Exception("Empty access token returned by gcloud auth print-access-token")
-    except Exception as e:
+    # 2. Check Application Default Credentials (ADC) token validity (Terraform requirement)
+    res_adc = subprocess.run(
+        ["gcloud", "auth", "application-default", "print-access-token"],
+        capture_output=True, text=True
+    )
+    if res_adc.returncode != 0 or not res_adc.stdout.strip():
+        err_msg = res_adc.stderr.strip()
         print(f"\n{COLOR_RED}================================================================={COLOR_RESET}")
-        print(f"{COLOR_RED}❌ AUTHENTICATION ERROR: Could not obtain OAuth2 token from gcloud{COLOR_RESET}")
+        print(f"{COLOR_RED}❌ AUTHENTICATION ERROR: Application Default Credentials (ADC) Missing/Expired{COLOR_RESET}")
         print(f"{COLOR_RED}================================================================={COLOR_RESET}")
         print(f"Active gcloud account is: {COLOR_BOLD}{active_account}{COLOR_RESET}")
-        print(f"Details: {e}")
-        print(f"\n👉 {COLOR_BOLD}Run the following command to authenticate:{COLOR_RESET}")
-        print(f"   {COLOR_GREEN}{COLOR_BOLD}gcloud auth login{COLOR_RESET}\n")
+        print(f"However, Terraform uses Application Default Credentials (ADC), which is not active or expired.")
+        if err_msg:
+            print(f"{COLOR_GRAY}Details: {err_msg}{COLOR_RESET}")
+        print(f"\n👉 {COLOR_BOLD}Run the following command to authenticate ADC for Terraform:{COLOR_RESET}")
+        print(f"   {COLOR_GREEN}{COLOR_BOLD}gcloud auth application-default login{COLOR_RESET}\n")
         sys.exit(1)
-        
+
     # 3. Check Terraform binary
     res_tf = subprocess.run(["terraform", "version"], capture_output=True, text=True)
     if res_tf.returncode != 0:
@@ -186,8 +189,8 @@ def check_environment_and_auth():
         print(res_tf.stderr)
         sys.exit(1)
         
-    logging.info(f"Pre-flight check passed: Active gcloud account '{active_account}' with valid OAuth2 access token.")
-    print(f"  {COLOR_GREEN}✔{COLOR_RESET} Authenticated as: {COLOR_BOLD}{active_account}{COLOR_RESET} (OAuth token verified & active)")
+    logging.info(f"Pre-flight check passed: Active gcloud account '{active_account}' with valid ADC.")
+    print(f"  {COLOR_GREEN}✔{COLOR_RESET} Authenticated as: {COLOR_BOLD}{active_account}{COLOR_RESET} (ADC verified & active)")
 
 def parse_and_validate_projects(auto_yes=False):
     """
@@ -477,11 +480,10 @@ def run_local_terraform_apply(project, builds, index):
                             file_path = os.path.join(root, file)
                             zipf.write(file_path, file_path)
                     
-        oauth_token = get_active_oauth_token()
         env = os.environ.copy()
         env["TF_PLUGIN_CACHE_DIR"] = os.path.abspath(PLUGIN_CACHE_DIR)
-        env["GOOGLE_OAUTH_ACCESS_TOKEN"] = oauth_token
-        env["CLOUDSDK_AUTH_ACCESS_TOKEN"] = oauth_token
+        env.pop("GOOGLE_OAUTH_ACCESS_TOKEN", None)
+        env.pop("CLOUDSDK_AUTH_ACCESS_TOKEN", None)
         
         # Step 1: Terraform Initialization
         builds[index]["status"] = "INIT"
@@ -492,8 +494,7 @@ def run_local_terraform_apply(project, builds, index):
             init_cmd = [
                 "terraform", "init",
                 f"-backend-config=bucket={project_id}-tfstate",
-                "-backend-config=prefix=terraform/state",
-                f"-backend-config=access_token={oauth_token}"
+                "-backend-config=prefix=terraform/state"
             ]
             init_res = None
             for attempt in range(3):
@@ -595,11 +596,10 @@ def run_local_terraform_destroy(project, builds, index):
                 else:
                     shutil.copy(item, os.path.join(workdir, item))
                     
-        oauth_token = get_active_oauth_token()
         env = os.environ.copy()
         env["TF_PLUGIN_CACHE_DIR"] = os.path.abspath(PLUGIN_CACHE_DIR)
-        env["GOOGLE_OAUTH_ACCESS_TOKEN"] = oauth_token
-        env["CLOUDSDK_AUTH_ACCESS_TOKEN"] = oauth_token
+        env.pop("GOOGLE_OAUTH_ACCESS_TOKEN", None)
+        env.pop("CLOUDSDK_AUTH_ACCESS_TOKEN", None)
         
         # Step 1: Terraform Initialization for Destroy
         builds[index]["status"] = "INIT"
@@ -610,8 +610,7 @@ def run_local_terraform_destroy(project, builds, index):
             init_cmd = [
                 "terraform", "init",
                 f"-backend-config=bucket={project_id}-tfstate",
-                "-backend-config=prefix=terraform/state",
-                f"-backend-config=access_token={oauth_token}"
+                "-backend-config=prefix=terraform/state"
             ]
             init_res = None
             for attempt in range(3):

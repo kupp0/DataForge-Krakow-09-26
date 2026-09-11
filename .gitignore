@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars
+crash.log
+crash.*.log
+.terraform_plugin_cache/
+
+# Local deploy orchestrator artifacts
+.deploy_workdirs/
+.deploy_state.json
+deploy_logs/
+*.log

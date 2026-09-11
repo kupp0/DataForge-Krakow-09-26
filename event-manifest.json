@@ -45,6 +45,14 @@
         "serverURL": "https://spanner.googleapis.com/mcp",
         "authProviderType": "google_credentials"
       }
+    },
+    {
+      "id": "google-developer-knowledge",
+      "type": "server",
+      "config": {
+        "command": "/google/bin/releases/devsite-mcp/server_main.par",
+        "args": []
+      }
     }
   ]
 }
