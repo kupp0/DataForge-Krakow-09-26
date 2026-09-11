@@ -353,25 +353,37 @@ Paste the following developer prompt into the active `agy` CLI session:
 > **Generation Flow**: The agent performs codebase research, generates `implementation_plan.md` for your approval, and then implements the backend, frontend, and startup scripts.
 
 ```text
-Goal: Build a high-performance, beautiful Disneyland Paris Navigator application in 10 minutes.
-Stack & Architecture: To bypass slow npm installations and build compilation steps, implement a clean FastAPI Python backend (app.py) paired with a rich, premium Single-Page HTML5/JS frontend (index.html) utilizing Tailwind CSS via CDN.
-Infrastructure Context: I have provisioned a Cloud Spanner instance called "disneyland" and a database called "agent-lab" in this Google Cloud project.
+Goal: Build a high-performance, beautiful Disneyland Navigator application.
+Stack & Architecture:
+- Backend: FastAPI Python service (app.py) serving REST endpoints and the single-page frontend at root ('/').
+- Frontend: Single-page HTML5/JS application (index.html) with Tailwind CSS via CDN and Vis.js for network graph visualization.
+- Infrastructure Context: Cloud Spanner instance "disneyland", database "agent-lab", property graph "DisneylandGraph".
 
-Database DDL & Property Graph Schema:
-Use the existing Spanner schema and property graph defined in my spanner instance: instances/disneyland/databases/agent-lab
+Backend Specifications (app.py):
+- Enable CORSMiddleware with allow_origins=["*"].
+- Serve index.html at GET '/' using FastAPI's FileResponse or HTMLResponse.
+- Use google-cloud-spanner Python SDK for direct data endpoints:
+  - GET /api/attractions: Queries all attraction nodes (id, name, zone, type) from Spanner.
+  - GET /api/paths: Queries all walkway edges (source, target, distance) from Spanner 'Path' table.
+  - POST /api/navigate: Takes source and destination attraction IDs. Fetches candidate graph paths using Spanner Graph MATCH query (or edges) and computes the optimal shortest route. Returns { "path": [...], "total_distance": N, "spanner_query": "..." }.
+- Use google-adk Python SDK for conversational endpoint:
+  - POST /api/chat: Invokes the Disneyland Agent configured with the Google-managed Spanner MCP server (Gemini Agent Platform registry, location: global, model: gemini-3.8-flash) to answer park questions. Returns { "response": "...", "queries_executed": [...] }.
 
-Agent & Integration Model: Integrate the AI Agent using the Google Antigravity (google-adk) Python SDK, utilizing the pre-installed custom skills available in your workspace (`.agents/skills/spanner-graph` and `.agents/skills/vertex-config`) to resolve model names, active GCP Project/credentials context, and Spanner GQL queries. Connect the agent to the Google-managed Spanner Model Context Protocol (MCP) Server registered under the Gemini Agent Platform (formerly VertexAI) Agent Registry (location: global).
-Instructions:
-- Show the planning phase of development first. Create an implementation plan as a standard markdown artifact for user review and approval before writing code.
-- Backend (app.py): Use FastAPI to expose endpoints.
-  - Endpoint /api/chat: Uses the google-adk SDK Agent (configured with the Spanner MCP server) to handle conversational database querying dynamically. Use gemini-3.8-flash model with location global.
-  - Endpoint /api/navigate: Executes custom Spanner Graph MATCH queries on the "DisneylandGraph" property graph to find optimized routes. Expose the executed Spanner SQL and Graph GQL queries in the API responses.
-  - Endpoint /api/paths: Queries all paths (edges) from the Spanner 'Path' table and serves them to feed the frontend network visualization.
-- Frontend (index.html): Create a premium, immersive Disneyland-themed user interface (glassmorphic cards, deep navy and sparkling royal gold colors, hover micro-animations).
-  - Features: Interactive pathfinder (source -> target attraction displaying path nodes and total distance), search filter, and a terminal-style Chat component connected to /api/chat.
-  - Graph Visualization: Build an interactive graph network (e.g. using Vis.js) that loads real attraction nodes from /api/attractions and real walkways/edges from /api/paths in parallel, rather than using mock frontend rings/heuristics. When a route is calculated, style the path nodes and path edges with high-contrast glowing gold/emerald/pink colors, and fade/dim the rest of the network nodes and edges (using dataset updates) so the correct path stands out cleanly without default selection highlighting noise.
-  - Add a "View Queries" button/panel to the top of the UI to allow users to inspect the exact Spanner SQL/GQL queries executed by the Agent and backend.
-- Startup Script (setup.sh): For local debugging, create an automated startup shell script that initializes a Python virtual environment, installs fastapi, uvicorn, google-adk, runs app.py, and opens the dashboard in the browser.
+Frontend Specifications (index.html):
+- Theme: Premium glassmorphic interface, deep navy background (#0b1120), sparkling royal gold accents (#f59e0b), smooth hover micro-animations.
+- Components:
+  - Interactive Route Finder: Dropdowns for Start and End attractions, a "Find Route" button, and distance breakdown card.
+  - Vis.js Graph Canvas: Loads real nodes from /api/attractions and edges from /api/paths on startup. When a route is found, highlights route nodes/edges in radiant gold/emerald and dims background nodes/edges.
+  - Chat Terminal: Collapsible or side-drawer chat window communicating with /api/chat.
+  - "View Queries" Inspector: Top-right button opening a modal/panel displaying the raw Spanner SQL and GQL queries executed by the last action.
+
+Startup & Validation (setup.sh):
+- Automated bash script that detects and activates existing 'venv' if present (otherwise creates one), ensures dependencies (fastapi, uvicorn, google-cloud-spanner, google-adk) are installed, runs app.py via uvicorn on 0.0.0.0:8000, and opens http://localhost:8000.
+
+Instructions for Agent:
+1. Research existing custom skills in `.agents/skills/` (`spanner-graph` and `vertex-config`) and verify Spanner database schema before coding.
+2. Produce implementation_plan.md for approval.
+3. Write app.py, index.html, and setup.sh.
 ```
 
 ---
