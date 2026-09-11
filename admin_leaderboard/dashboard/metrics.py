@@ -1,27 +1,33 @@
 """
 High-Performance Telemetry collection module for Disneyland Spanner Hackathon Admin.
-Optimized with parallel multi-threaded queries, singleton client reuse, and single-shot BigQuery union view inspection.
+Direct authoritative Cloud Spanner schema & row counts + Cloud Monitoring API integration.
+Parallelized with ThreadPoolExecutor across all 25 projects.
 """
 import os
-import re
 import datetime
+import logging
 from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 
+# Suppress client-side telemetry export noise
+os.environ["OTEL_SDK_DISABLED"] = "true"
+os.environ["GOOGLE_CLOUD_SPANNER_ENABLE_OTEL_METRICS"] = "false"
+logging.getLogger("google.cloud.monitoring").setLevel(logging.ERROR)
+
 try:
     from google.cloud import monitoring_v3
-    from google.cloud import bigquery
+    from google.cloud import spanner
 except ImportError:
     monitoring_v3 = None
-    bigquery = None
+    spanner = None
 
 from business_rules import calculate_attraction_run_metrics, compute_participant_score
 
 PROJECTS_TXT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../projects.txt"))
 
-# Singleton Client Cache to avoid gRPC connection handshake overhead
+# Reusable client caches
 _MONITORING_CLIENT = None
-_BQ_CLIENT = None
+_SPANNER_CLIENTS: Dict[str, Any] = {}
 
 def get_monitoring_client():
     global _MONITORING_CLIENT
@@ -32,18 +38,18 @@ def get_monitoring_client():
             _MONITORING_CLIENT = None
     return _MONITORING_CLIENT
 
-def get_bq_client(admin_project_id: str):
-    global _BQ_CLIENT
-    if _BQ_CLIENT is None and bigquery:
+def get_spanner_client(project_id: str):
+    global _SPANNER_CLIENTS
+    if project_id not in _SPANNER_CLIENTS and spanner:
         try:
-            _BQ_CLIENT = bigquery.Client(project=admin_project_id)
+            _SPANNER_CLIENTS[project_id] = spanner.Client(project=project_id)
         except Exception:
-            _BQ_CLIENT = None
-    return _BQ_CLIENT
+            return None
+    return _SPANNER_CLIENTS.get(project_id)
 
-def parse_projects_mapping(admin_project_id: str = "dataforge26krk-6725") -> List[Dict[str, str]]:
+def parse_projects_mapping(admin_project_id: str = "dataforge26krk-6725") -> List[Dict[str, Any]]:
     """
-    Parses projects.txt and returns list of participants excluding the admin project.
+    Parses projects.txt and returns all 25 participants, labeling admin as Facilitator.
     Format: PROJECT_ID, IAP_MEMBER, REGION, CITY
     """
     participants = []
@@ -76,7 +82,7 @@ def fetch_participant_monitoring_metrics(
     client: Optional[Any] = None
 ) -> Dict[str, float]:
     """
-    Fetches both CPU utilization (%) and Storage (MB) using the shared monitoring client.
+    Fetches CPU utilization (%) and Storage (MB) using the shared monitoring client.
     """
     if not client:
         return {"cpu_utilization_pct": 0.0, "storage_mb": 0.0}
@@ -134,84 +140,60 @@ def fetch_participant_monitoring_metrics(
         "storage_mb": storage_mb
     }
 
-def fetch_all_participant_summary_view(admin_project_id: str, bq_client: Optional[Any] = None) -> Dict[str, Dict[str, Any]]:
+def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
     """
-    Queries the centralized union view v_participant_tables_summary in BigQuery in a single query.
+    Authoritative, direct Cloud Spanner schema & row count inspection.
     """
-    summary = {}
-    if not bq_client:
-        return summary
-    try:
-        query = f"SELECT * FROM `{admin_project_id}.admin_leaderboard.v_participant_tables_summary`"
-        for r in bq_client.query(query).result():
-            tables_list = [t.strip() for t in r.tables_list.split(",")] if r.tables_list else []
-            summary[r.project_id] = {
-                "tables": tables_list,
-                "total_tables": r.total_tables_created,
-                "has_disneylandpark": r.has_disneylandpark,
-                "has_attraction": r.has_attraction,
-                "has_path": r.has_path,
-                "has_runs_challenge": r.has_runs_challenge
-            }
-    except Exception:
-        pass
-    return summary
-
-def fetch_participant_rows_and_details(
-    admin_project_id: str, 
-    participant: Dict[str, str],
-    tables_found: List[str],
-    bq_client: Optional[Any] = None
-) -> Dict[str, Any]:
-    """
-    Queries row counts only if tables actually exist.
-    """
+    tables = []
+    has_graph = False
     total_rows = 0
-    ticket_price = 0.0
     runs = 0
-    raw_visitors = 0
-    
-    if not bq_client or not tables_found:
+    ticket_price = 0.0
+
+    client = get_spanner_client(project_id)
+    if not client:
         return {
-            "total_rows": 0,
-            "has_graph": False,
-            "ticket_price": 0.0,
-            "runs": 0,
-            "raw_visitors": 0
+            "tables": tables,
+            "total_rows": total_rows,
+            "has_graph": has_graph,
+            "runs": runs,
+            "ticket_price": ticket_price
         }
 
-    dataset_name = f"spanner_user_{participant['short_id']}"
-    for t in tables_found:
-        t_lower = t.lower()
-        if t_lower in ["disneylandpark", "attraction", "path"]:
-            try:
-                count_q = f"SELECT COUNT(1) as cnt FROM `{admin_project_id}.{dataset_name}.{t}`"
-                for row in bq_client.query(count_q).result():
-                    total_rows += row.cnt
-            except Exception:
-                pass
-        elif "attractionrun" in t_lower or "parkrun" in t_lower or "rideexecution" in t_lower:
-            try:
-                run_q = f"""
-                SELECT 
-                    COUNT(1) as total_runs, 
-                    AVG(SAFE_CAST(ticket_price AS FLOAT64)) as avg_price
-                FROM `{admin_project_id}.{dataset_name}.{t}`
-                """
-                for r in bq_client.query(run_q).result():
-                    runs = r.total_runs or 0
-                    ticket_price = r.avg_price or 0.0
-            except Exception:
-                pass
+    try:
+        db = client.instance("disneyland").database("agent-lab")
+        with db.snapshot(multi_use=True) as s:
+            # 1. Query tables
+            tables = [r[0] for r in s.execute_sql(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ''"
+            )]
+            
+            # 2. Query property graph
+            graphs = [r[0] for r in s.execute_sql(
+                "SELECT property_graph_name FROM information_schema.property_graphs"
+            )]
+            has_graph = len(graphs) > 0
 
-    has_graph = any(t.lower() == "path" for t in tables_found) and any(t.lower() == "attraction" for t in tables_found)
+            # 3. Query row counts for core Disneyland tables
+            for t in tables:
+                t_lower = t.lower()
+                if t_lower in ["disneylandpark", "attraction", "path"]:
+                    for r in s.execute_sql(f"SELECT COUNT(1) FROM {t}"):
+                        total_rows += r[0]
+                elif "attractionrun" in t_lower or "parkrun" in t_lower or "rideexecution" in t_lower:
+                    for r in s.execute_sql(f"SELECT COUNT(1), AVG(TicketPrice) FROM {t}"):
+                        runs = r[0] or 0
+                        ticket_price = float(r[1]) if r[1] is not None else 0.0
+    except Exception:
+        # Database might not exist yet or instance not provisioned
+        pass
 
     return {
+        "tables": tables,
         "total_rows": total_rows,
         "has_graph": has_graph,
-        "ticket_price": ticket_price,
         "runs": runs,
-        "raw_visitors": raw_visitors
+        "ticket_price": ticket_price
     }
 
 def get_leaderboard_snapshot(
@@ -219,7 +201,7 @@ def get_leaderboard_snapshot(
     use_mock: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Compiles snapshot across all 24 participants in parallel using thread pool.
+    Compiles snapshot across all 25 participants in parallel.
     """
     participants = parse_projects_mapping(admin_project_id)
     
@@ -250,15 +232,12 @@ def get_leaderboard_snapshot(
                 "runs": runs,
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
-                "profit": biz["profit"]
+                "profit": biz["profit"],
+                "is_facilitator": p.get("is_facilitator", False)
             }
             temp_records.append(rec)
     else:
-        bq_client = get_bq_client(admin_project_id)
         mon_client = get_monitoring_client()
-
-        # Step 1: Single query against BQ union view to get tables for all 24 participants
-        bq_summary = fetch_all_participant_summary_view(admin_project_id, bq_client)
 
         now = datetime.datetime.now(datetime.timezone.utc)
         start_time = now - datetime.timedelta(minutes=15)
@@ -267,22 +246,20 @@ def get_leaderboard_snapshot(
             "start_time": {"seconds": int(start_time.timestamp())}
         }) if monitoring_v3 else None
 
-        # Step 2: Parallel worker for each participant
+        # Parallel worker per project
         def process_participant(p):
             proj_id = p["project_id"]
-            tables_found = bq_summary.get(proj_id, {}).get("tables", [])
             
-            # Row counts only if tables exist
-            tbl_details = fetch_participant_rows_and_details(admin_project_id, p, tables_found, bq_client)
+            # 1. Spanner inspection
+            spanner_data = fetch_participant_spanner_details(proj_id)
             
-            # Monitoring metrics
+            # 2. Monitoring metrics
             mon_metrics = fetch_participant_monitoring_metrics(proj_id, interval, mon_client)
             
-            # Business metrics
+            # 3. Business metrics
             biz = calculate_attraction_run_metrics(
-                tbl_details["ticket_price"], 
-                tbl_details["runs"], 
-                tbl_details["raw_visitors"]
+                spanner_data["ticket_price"], 
+                spanner_data["runs"]
             )
             
             return {
@@ -290,19 +267,20 @@ def get_leaderboard_snapshot(
                 "city": p["city"],
                 "member": p["member"],
                 "short_id": p["short_id"],
-                "tables": tables_found,
-                "total_rows": tbl_details["total_rows"],
-                "has_graph": tbl_details["has_graph"],
+                "tables": spanner_data["tables"],
+                "total_rows": spanner_data["total_rows"],
+                "has_graph": spanner_data["has_graph"],
                 "cpu_utilization_pct": mon_metrics["cpu_utilization_pct"],
                 "storage_mb": mon_metrics["storage_mb"],
-                "ticket_price": tbl_details["ticket_price"],
-                "runs": tbl_details["runs"],
+                "ticket_price": spanner_data["ticket_price"],
+                "runs": spanner_data["runs"],
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
-                "profit": biz["profit"]
+                "profit": biz["profit"],
+                "is_facilitator": p.get("is_facilitator", False)
             }
 
-        with ThreadPoolExecutor(max_workers=24) as executor:
+        with ThreadPoolExecutor(max_workers=25) as executor:
             temp_records = list(executor.map(process_participant, participants))
 
     max_revenue = max([r["revenue"] for r in temp_records], default=1.0)
@@ -314,6 +292,7 @@ def get_leaderboard_snapshot(
         r.update(scored)
         results.append(r)
         
+    # Sort descending by total score, then by revenue
     results.sort(key=lambda x: (x["score"], x["revenue"], x["total_rows"]), reverse=True)
     for rank, r in enumerate(results, start=1):
         r["rank"] = rank
