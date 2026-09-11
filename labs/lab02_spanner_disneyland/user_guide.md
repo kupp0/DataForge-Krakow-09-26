@@ -1,8 +1,6 @@
 # 🎡 Lab 2: Disneyland Agentic Codelab with Cloud Spanner & BigQuery
 
-Welcome, Theme Park Architects! 🎢
-
-Navigating Disneyland is serious business. In this codelab, you will build a zero-copy federated analytical "bridge" linking the transactional speed of **Cloud Spanner** with the analytical power of **BigQuery**—enabling real-time lookups on live rides and visitor queues. Then, you'll deploy the **MCP Toolbox** and unleash the **Antigravity CLI (agy)** to build a fully functional, AI-powered pathfinding guide so that visitors never get lost between Space Mountain and Big Thunder Mountain!
+In this codelab, you will build a zero-copy federated bridge linking **Cloud Spanner** with **BigQuery**, configure the **Spanner Model Context Protocol (MCP)** server, and use the **Antigravity CLI (`agy`)** to generate an AI-powered pathfinding web application over a Spanner Property Graph.
 
 ---
 
@@ -291,10 +289,10 @@ To verify the registry connection:
 
 Use the **Antigravity CLI (agy)** in your Cloud Workstation to generate a complete web app (FastAPI backend and HTML5 frontend) that leverages **Spanner Graph** pathfinding.
 
-### 📂 1. Open the Home Folder & Terminal in Cloud Workstations
+### 📂 1. Open the Project Folder & Terminal in Cloud Workstations
 
 1. Launch your workstation instance from the Cloud Workstations page.
-2. In the editor, select **File** -> **Open Folder**, enter `/home/user/`, and click **OK**.
+2. In the editor, select **File** -> **Open Folder**, enter `/home/user/labs/lab02_spanner_disneyland`, and click **OK**.
 3. Open a terminal by selecting **Terminal** -> **New Terminal** (or press `Ctrl+Shift+C`).
 
 <img src="assets/workstation_terminal.png" alt="Open Workstation Terminal" width="350" />
@@ -311,60 +309,48 @@ if [ -z "$(gcloud config get-value account 2>/dev/null)" ] || [ ! -f ~/.config/g
 ```
 *(If prompted, sign in using your Google account and paste the authorization code into the terminal).*
 
-Then, set your active project (if it wasn't pre-configured automatically by the workstation bootstrap):
+Then, set your active project:
 
 ```bash
 gcloud config set project <YOUR_PROJECT_ID>
 ```
-*(Replace `<YOUR_PROJECT_ID>` with your assigned project ID, e.g. `dach-databases26fra-3904`).*
-
+*(Replace `<YOUR_PROJECT_ID>` with your assigned project ID, e.g. `dataforge26krk-6701`).*
 
 ---
 
 > [!IMPORTANT]
-> **Understanding the Two Different Logins**:
-> During this lab, you will perform **two distinct authentication flows**:
-> 1. **Google Cloud SDK & ADC Login (`gcloud auth login --update-adc`)**: Authenticates your terminal environment so python scripts and MCP tools can read/write to your Spanner database and Vertex AI.
-> 2. **Antigravity CLI Login (`agy`)**: Authenticates your terminal session with the Antigravity developer backend platform. When you first launch `agy`, you must authenticate using your active Google Cloud project ID.
-> 
-> Both logins are required, and both are saved permanently in your persistent `/home/user/` directory once completed.
+> **Two Authentication Flows**:
+> 1. **Terminal / ADC (`gcloud auth login --update-adc`)**: Enables python scripts and MCP tools to access Spanner and Vertex AI.
+> 2. **Antigravity CLI (`agy`)**: Authenticates your developer session using your assigned Google Cloud project ID.
 
 ### ⚙️ 3. Initialize the Antigravity CLI
 
-Navigate to the project workspace and launch the CLI:
+Navigate to the lab directory and launch the CLI:
 ```bash
-cd ~/lab02_disneyland_navigator
+cd ~/labs/lab02_spanner_disneyland
 agy
 ```
 
-When running `agy` for the first time, you will be prompted with login choices. Select **2. Use a Google Cloud project** as the login method:
+When running `agy` for the first time, select **2. Use a Google Cloud project** as the login method:
 
 ![Select 'Use a Google Cloud project' as login method](../../assets/agy_login_cloud_project.png)
 
-Use the arrow keys to navigate and press **Enter** to select. Then, provide the active Google Cloud project ID (e.g. `hackathon-prep-499508`). Once done, subsequent launches will automatically load your credentials and skip these prompts.
+Enter your assigned project ID (e.g. `dataforge26krk-6701`).
 
-
-1. **Workspace Trust**: Trust the workspace folder if prompted by Code-OSS.
-2. **Enable Auto-Approve**: Open settings with `/settings` and set:
+Configure initial session settings:
+1. **Enable Auto-Approve**: In `agy`, type `/settings` and set:
    * **Tool Permission**: `always-proceed`
    * **Artifact Review**: `agent decides`
-3. **Verify Connection**: Type `/mcp` to ensure the Google-managed Spanner MCP server shows a green connected status.
-
-#### 🛠️ Useful CLI Commands
-* `/settings`: Configure model parameters and auto-approve settings.
-* `/mcp`: Check active MCP servers and connection health.
-* `/list-sessions`: View past session activity.
-* `/resume latest`: Return to the last active conversation.
-* `/exit`: Quit the CLI session.
+2. **Verify MCP**: Type `/mcp` to ensure the Google-managed Spanner MCP server displays connected.
 
 ---
 
 ### 🎯 4. Prompting Antigravity to Generate the Agentic Application
 
-Paste the following developer prompt into the active `agy` CLI interactive chat session to initiate code generation:
+Paste the following developer prompt into the active `agy` CLI session:
 
 > [!NOTE]
-> **Generation Duration**: The generation process runs autonomously and will take approximately **10-20 minutes** to complete. Monitor your active `agy` CLI session closely, as it will perform a codebase research phase first, generate the `implementation_plan.md` file, and then pause to wait for your review and approval before proceeding to the code execution phase.
+> **Generation Flow**: The agent performs codebase research, generates `implementation_plan.md` for your approval, and then implements the backend, frontend, and startup scripts.
 
 ```text
 Goal: Build a high-performance, beautiful Disneyland Paris Navigator application in 10 minutes.
@@ -381,7 +367,7 @@ Use the existing Spanner schema and property graph defined as follows:
     NODE TABLES (Attraction)
     EDGE TABLES (Path SOURCE KEY (SourceAttractionID) REFERENCES Attraction (AttractionID) DESTINATION KEY (TargetAttractionID) REFERENCES Attraction (AttractionID));
 
-Agent & Integration Model: Integrate the AI Agent using the Google Antigravity (google-adk) Python SDK, utilizing the pre-installed custom skills available in your workspace (`skills/spanner-graph` and `skills/vertex-config`) to resolve model names, active GCP Project/credentials context, and Spanner GQL queries. Connect the agent to the Google-managed Spanner Model Context Protocol (MCP) Server registered under the Gemini Agent Platform (formerly VertexAI) Agent Registry (location: global).
+Agent & Integration Model: Integrate the AI Agent using the Google Antigravity (google-adk) Python SDK, utilizing the pre-installed custom skills available in your workspace (`.agents/skills/spanner-graph` and `.agents/skills/vertex-config`) to resolve model names, active GCP Project/credentials context, and Spanner GQL queries. Connect the agent to the Google-managed Spanner Model Context Protocol (MCP) Server registered under the Gemini Agent Platform (formerly VertexAI) Agent Registry (location: global).
 Instructions:
 - Show the planning phase of development first. Create an implementation plan as a standard markdown artifact for user review and approval before writing code.
 - Backend (app.py): Use FastAPI to expose endpoints.
@@ -496,13 +482,13 @@ The central event leaderboard evaluates your park revenue based on real-world **
 ### 3. Scale Spanner Compute to Eliminate Bottlenecks
 
 By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node).
-* **The Throughput Bottleneck**: A high-concurrency ingestion script inserting thousands of attraction runs will rapidly saturate 100 PUs at 100% CPU, causing Spanner to throttle mutations or throw timeout errors.
-* **Elastic Scaling**: To achieve maximum throughput and climb the event leaderboard, scale your Spanner compute capacity:
+* **The Throughput Bottleneck**: A high-concurrency ingestion script will saturate 100 PUs at 100% CPU, causing Spanner to throttle writes and drop requests.
+* **Elastic Scaling**: Scale compute capacity directly via CLI (or let `agy` automate it in the next step):
   ```bash
   # Scale to 500 Processing Units (0.5 Node)
   gcloud spanner instances update disneyland --processing-units=500
 
-  # Or scale to 1 Full Node (1,000 PUs) for extreme write throughput
+  # Or scale to 1 Full Node (1,000 PUs) for maximum write throughput
   gcloud spanner instances update disneyland --processing-units=1000
   ```
 > [!TIP]
@@ -542,14 +528,21 @@ Review the implementation plan generated by `agy`, click **Proceed**, and let `a
 
 ---
 
-## 🔧 Phase 7: Troubleshooting & Pro-Tips
+## 🔧 Phase 7: Pro-Tips & Advanced Extensions
 
-* **📊 Architecture Visualization (PlantUML)**: Ask the `agy` CLI to generate a PlantUML diagram of the generated app (e.g., *"Generate a PlantUML sequence diagram showing request flow from frontend to Spanner"*). Paste the output markup into a PlantUML visualization tool or Gemini to render it.
-* **🪄 Vibe-Coding Inspiration**: Use the `agy` CLI to add creative custom features to your app:
-  * 🎢 **Churro-Metric Navigation**: Calculate path distances in terms of average Disneyland churros consumed.
-  * 🐭 **Mickey Voice Mode**: Instruct the AI guide to chat in the optimistic, squeaky voice of Mickey Mouse.
-  * 🚀 **Warp-Speed Effects**: Trigger interactive CSS animation/particle effects when Space Mountain is clicked.
-  * 🔍 **Semantic Search**: Use Spanner's vector embeddings (`Embedding ARRAY<FLOAT32>`) on the `Attraction` table to implement semantic attraction searches.
+* **📊 Architecture Visualization (PlantUML)**: Ask `agy` to generate a PlantUML sequence diagram showing request flow from frontend to Spanner (`agy "Generate a PlantUML sequence diagram for our app"`).
+* **🔍 Semantic Vector Search**: Run vector similarity search on `Attraction.Embedding` using native cosine distance in Spanner Studio:
+  ```sql
+  -- Find attractions semantically similar to a query vector
+  SELECT AttractionID, Name, Land, Type
+  FROM Attraction
+  ORDER BY COSINE_DISTANCE(Embedding, @query_embedding) ASC
+  LIMIT 5;
+  ```
+* **⚡ Lock Contention Diagnostics**: If seeing write timeouts under heavy load, check Spanner lock contention:
+  ```sql
+  SELECT * FROM SPANNER_SYS.LOCK_STATS_TOP_10MINUTE;
+  ```
 
 ---
 
