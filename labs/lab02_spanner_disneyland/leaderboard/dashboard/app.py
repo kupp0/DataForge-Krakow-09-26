@@ -56,20 +56,9 @@ st.markdown("""
     .rank-2 { color: #c0c0c0; font-weight: bold; font-size: 1.1em; }
     .rank-3 { color: #cd7f32; font-weight: bold; font-size: 1.1em; }
 
-    /* =========================================================================
-       SEAMLESS ZERO-FLICKER BACKGROUND UPDATES (No Grey-Out / No Dims)
-       ========================================================================= */
-    /* Prevent Streamlit from dimming/greying out stale elements during rerun */
-    [data-stale="true"],
-    div[data-testid="stElementContainer"][data-stale="true"],
-    .stElementContainer[data-stale="true"],
-    [data-test-script-state="running"] [data-stale="true"],
-    .stApp[data-test-script-state="running"] [data-stale="true"],
-    .stApp[data-test-script-state="running"] [data-testid="stMain"] [data-stale="true"],
-    .stApp[data-test-script-state="running"] [data-testid="stVerticalBlock"] > div {
-        opacity: 1 !important;
+    /* Prevent transition flashing on element containers */
+    .stElementContainer {
         transition: none !important;
-        filter: none !important;
     }
 
     /* Disable markdown shimmering text masks during reload */
@@ -96,6 +85,19 @@ st.markdown("""
 # Main Title & Subheader
 st.title("🏰 Lab 2: Disneyland Spanner Global Leaderboard")
 st.markdown("Real-time telemetry, scoring, revenue gamification & closing ceremony for **Lab 2 (Disneyland Spanner Hackathon)**.")
+
+# Dedicated placeholder for Roast HUD to preserve static element indices
+roast_hud_placeholder = st.empty()
+
+CYCLE_SECONDS = 240   # Every 4 minutes (240s)
+
+@st.cache_data(ttl=CYCLE_SECONDS, show_spinner=False)
+def get_cached_roast(cycle_id: int, project_id: str, force_nonce: int = 0):
+    import llm_announcer
+    importlib.reload(llm_announcer)
+    mgr = metrics.BackgroundTelemetryManager.get_instance()
+    snap, _ = mgr.get_snapshot(project_id)
+    return llm_announcer.generate_roast_broadcast(snap, project_id)
 
 # Sidebar Controls
 st.sidebar.title("🏰 Lab 2 Command Center")
@@ -200,16 +202,11 @@ if roaster_enabled:
         secs = time_until_next % 60
         st.sidebar.markdown(f"⏳ **Next Roast In**: `{mins}m {secs:02d}s`")
 
-    @st.cache_data(ttl=CYCLE_SECONDS)
-    def get_cached_roast(telemetry_data, project_id, cycle_id):
-        import llm_announcer
-        importlib.reload(llm_announcer)
-        return llm_announcer.generate_roast_broadcast(telemetry_data, project_id)
-
+    force_nonce = 1 if force_roast else 0
     if force_roast:
         get_cached_roast.clear()
 
-    roast = get_cached_roast(data, "dataforge26krk-6725", current_cycle_id)
+    roast = get_cached_roast(current_cycle_id, "dataforge26krk-6725", force_nonce)
 
     # Render Hover Flashy Message HUD if in active 1-minute window or toggled on
     if is_active_window or always_show_roast or force_roast:
@@ -221,7 +218,8 @@ if roaster_enabled:
         model_name = roast.get("model", "Gemini 3.8 Flash")
         roast_ts = roast.get("timestamp", time.strftime("%H:%M:%S"))
 
-        st.markdown(f"""
+        with roast_hud_placeholder.container():
+            st.markdown(f"""
         <style>
         @keyframes neonGlow {{
           0% {{ box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 15px rgba(255, 121, 198, 0.4); border-color: #ff79c6; }}
@@ -355,7 +353,6 @@ if roaster_enabled:
                 e.stopPropagation();
                 e.preventDefault();
                 card.style.display = "none";
-                card.remove();
               };
             }
 
@@ -496,51 +493,11 @@ if roaster_enabled:
         """, height=0, width=0)
 
     else:
-        st.markdown("""
-        <style>
-        #roastCard, .roast-floating-card {
-          display: none !important;
-          visibility: hidden !important;
-          opacity: 0 !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        components.html("""
-        <script>
-        (function() {
-          const pDoc = window.parent.document;
-          const cards = pDoc.querySelectorAll("#roastCard, .roast-floating-card");
-          cards.forEach(c => {
-            c.style.display = 'none';
-            c.remove();
-          });
-        })();
-        </script>
-        """, height=0, width=0)
+        roast_hud_placeholder.empty()
 
 else:
     st.sidebar.markdown("🎙️ **Live Roast Status**: ⏸️ Stopped (Disabled)")
-    st.markdown("""
-    <style>
-    #roastCard, .roast-floating-card {
-      display: none !important;
-      visibility: hidden !important;
-      opacity: 0 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    components.html("""
-    <script>
-    (function() {
-      const pDoc = window.parent.document;
-      const cards = pDoc.querySelectorAll("#roastCard, .roast-floating-card");
-      cards.forEach(c => {
-        c.style.display = 'none';
-        c.remove();
-      });
-    })();
-    </script>
-    """, height=0, width=0)
+    roast_hud_placeholder.empty()
 
 # Summary Metrics Row
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -1233,8 +1190,38 @@ with tab_ceremony:
         with st.expander("📝 Cloud Spanner Live DML Execution Receipt", expanded=True):
             st.dataframe(pd.DataFrame(st.session_state["live_dml_logs"]), use_container_width=True, hide_index=True)
 
-# Auto-refresh loop
+# Auto-refresh loop (client-side non-blocking trigger)
 if auto_refresh:
-    time.sleep(refresh_interval)
-    st.rerun()
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const pWin = window.parent;
+            if (pWin._autoRefreshTimer) clearTimeout(pWin._autoRefreshTimer);
+            pWin._autoRefreshTimer = pWin.setTimeout(() => {{
+                const btns = Array.from(pWin.document.querySelectorAll('button'));
+                const redrawBtn = btns.find(b => b.textContent.includes('🔄 Redraw UI') || b.textContent.includes('Redraw UI'));
+                if (redrawBtn) {{
+                    redrawBtn.click();
+                }}
+            }}, {refresh_interval * 1000});
+        }})();
+        </script>
+        """,
+        height=0,
+        width=0
+    )
+else:
+    components.html(
+        """
+        <script>
+        (function() {
+            const pWin = window.parent;
+            if (pWin._autoRefreshTimer) clearTimeout(pWin._autoRefreshTimer);
+        })();
+        </script>
+        """,
+        height=0,
+        width=0
+    )
 
