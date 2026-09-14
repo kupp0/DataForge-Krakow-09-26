@@ -20,7 +20,7 @@ In this codelab, you will build a zero-copy federated bridge linking **Cloud Spa
 
 ---
 
-## 🏗️ Phase 1: Infrastructure Provisioning (Terraform)
+## 🏗️ Phase 1: Infrastructure Provisioning (Terraform) `[UNDERSTAND]`
 
 The infrastructure is already deployed, if you are interested in the terraform code, you can find it in the [infrastructure](../../infrastructure) directory.
 
@@ -28,16 +28,19 @@ The infrastructure is already deployed, if you are interested in the terraform c
 
 ## 🗄️ Phase 2: Schema Creation & Data Ingestion
 
-Populate Spanner database **`agent-lab`** with tables and data.
+Populate Spanner database **`agent-lab`** with tables, graph definitions, and seed data.
 
 1. Go to the **Cloud Spanner** page in the Google Cloud Console.
 2. Click on your Spanner instance **`disneyland`**, and then select database **`agent-lab`**.
 3. In the left sidebar, click **Spanner Studio**.
-4. Open a new query tab, paste the SQL script below, and click **Run**:
+4. Open a new query tab, paste the SQL scripts below, and click **Run**:
 
-#### 1. Define Tables & Property Graph (DDL)
+### 🎯 Step 1: Define Tables & Property Graph (DDL) `[TASK]`
 
 Copy and run the schema definition in Spanner Studio:
+
+<details>
+<summary><b>▶ Click to expand Table & Property Graph Schema (DDL)</b></summary>
 
 ```sql
 -- 1. Create DisneylandPark Table
@@ -80,8 +83,11 @@ CREATE OR REPLACE PROPERTY GRAPH DisneylandGraph
       DESTINATION KEY (TargetAttractionID) REFERENCES Attraction (AttractionID)
   );
 ```
+</details>
 
-#### 2. Seed Park Attractions & Walkway Topology (DML)
+---
+
+### 🎯 Step 2: Seed Park Attractions & Walkway Topology (DML) `[TASK]`
 
 Click the dropdown below to expand, copy the seed script, and run it in Spanner Studio:
 
@@ -269,7 +275,7 @@ INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES
 
 ---
 
-## 🎛️ Phase 3: Model Context Protocol (MCP) Agent Registry Verification
+## 🎛️ Phase 3: Model Context Protocol (MCP) Agent Registry Verification `[TASK]`
 
 Spanner is automatically registered as a Google-managed MCP Server in the Gemini Agent Platform (formerly VertexAI) **Agent Registry** once active.
 
@@ -294,7 +300,7 @@ Time to roll up your sleeves and get your hands dirty—**this is where the real
 
 With your database seeded and the MCP server connected, you'll put the **Antigravity CLI (`agy`)** into the driver's seat to autonomously architect, implement, and run a complete AI-driven Disneyland pathfinding web application (FastAPI backend + interactive HTML5 frontend) powered by **Spanner Property Graph** queries.
 
-### 📂 1. Open the Project Folder & Terminal in Cloud Workstations
+### 📂 Step 1: Open the Project Folder & Terminal in Cloud Workstations `[TASK]`
 
 1. Launch your workstation instance from the Cloud Workstations page.
 2. In the editor, select **File** -> **Open Folder**, enter `/home/user/labs/lab02_spanner_disneyland`, and click **OK**.
@@ -304,7 +310,7 @@ With your database seeded and the MCP server connected, you'll put the **Antigra
 
 ---
 
-### 🔑 2. Authenticate the Terminal & Set Active Project
+### 🔑 Step 2: Authenticate the Terminal & Set Active Project `[TASK]`
 
 Authenticate both the `gcloud` CLI and Application Default Credentials (ADC) if they are not already set:
 
@@ -328,7 +334,7 @@ gcloud config set project <YOUR_PROJECT_ID>
 > 1. **Terminal / ADC (`gcloud auth login --update-adc`)**: Enables python scripts and MCP tools to access Spanner and Vertex AI.
 > 2. **Antigravity CLI (`agy`)**: Authenticates your developer session using your assigned Google Cloud project ID.
 
-### ⚙️ 3. Initialize the Antigravity CLI
+### ⚙️ Step 3: Initialize the Antigravity CLI `[TASK]`
 
 Navigate to the lab directory and launch the CLI with permissions auto-approved:
 ```bash
@@ -350,7 +356,7 @@ Verify MCP connectivity:
 
 ---
 
-### 🎯 4. Prompting Antigravity to Generate the Agentic Application
+### 🤖 Step 4: Prompting Antigravity to Generate the Agentic Application `[TASK]`
 
 Paste the following developer prompt into the active `agy` CLI session:
 
@@ -404,7 +410,7 @@ Instructions for Agent:
 
 ---
 
-### 💻 5. Run and Explore the Application
+### 💻 Step 5: Run and Explore the Application `[TASK]`
 
 Once the agent completes the code generation:
 
@@ -420,7 +426,7 @@ Once the agent completes the code generation:
 
 ---
 
-### ☁️ 6. Deploying to Google Cloud Run with Antigravity
+### ☁️ Step 6: Deploying to Google Cloud Run with Antigravity `[TASK]`
 
 Now that the Navigator works locally in your workstation, deploy it to **Google Cloud Run** to share a live, publicly accessible URL with your team.
 
@@ -452,7 +458,7 @@ Once `agy` outputs the service URL (e.g. `https://disneyland-navigator-xxxxx-ew.
 
 ---
 
-### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood `[UNDERSTAND]`
+### 🧭 Step 7: Deep Dive: Spanner Graph Queries under the Hood `[UNDERSTAND]`
 
 The agent uses native **Spanner Graph** queries (via the `GRAPH_TABLE` function) to traverse the property graph. For example:
 
@@ -613,7 +619,7 @@ python3 spanner_load_test.py --threads 16 --duration-seconds 90
 
 ---
 
-## 🔧 Phase 6: Pro-Tips & Advanced Extensions
+## 🔧 Phase 6: Pro-Tips & Advanced Extensions `[UNDERSTAND]`
 
 * **🌉 Real-Time BigQuery Data Federation (Optional)**:
   Cloud Spanner can be queried directly from BigQuery via zero-copy external datasets without exporting or syncing data:
