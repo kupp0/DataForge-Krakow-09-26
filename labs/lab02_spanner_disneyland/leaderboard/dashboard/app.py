@@ -138,7 +138,7 @@ roaster_enabled = st.sidebar.toggle(
 )
 
 if roaster_enabled:
-    always_show_roast = st.sidebar.checkbox("Always Show Roast HUD (Preview)", value=False, help="Keep the funny roast HUD visible permanently for testing or demoing")
+    always_show_roast = st.sidebar.checkbox("Pin Roast HUD on Screen", value=True, help="Keep the funny roast HUD visible permanently so the facilitator can position and move it anywhere")
 
     if st.sidebar.button("🎭 Roast A Park Now (Re-Roll)"):
         st.session_state["force_roast_refresh"] = True
@@ -153,15 +153,16 @@ if roaster_enabled:
     is_active_window = elapsed_in_cycle < DISPLAY_SECONDS
     remaining_seconds = max(1, DISPLAY_SECONDS - elapsed_in_cycle)
 
-    if is_active_window or always_show_roast:
-        st.sidebar.markdown(f"🎙️ **Live Roast Status**: 🔴 On-Air ({remaining_seconds}s left)")
+    force_roast = st.session_state.pop("force_roast_refresh", False)
+
+    if is_active_window or always_show_roast or force_roast:
+        status_label = f"{remaining_seconds}s left" if (is_active_window and not always_show_roast) else "Pinned / Live"
+        st.sidebar.markdown(f"🎙️ **Live Roast Status**: 🔴 On-Air ({status_label})")
     else:
         time_until_next = CYCLE_SECONDS - elapsed_in_cycle
         mins = time_until_next // 60
         secs = time_until_next % 60
         st.sidebar.markdown(f"⏳ **Next Roast In**: `{mins}m {secs:02d}s`")
-
-    force_roast = st.session_state.pop("force_roast_refresh", False)
 
     @st.cache_data(ttl=CYCLE_SECONDS)
     def get_cached_roast(telemetry_data, project_id, cycle_id):
@@ -199,29 +200,46 @@ if roaster_enabled:
 
         .roast-floating-card {{
           position: fixed;
-          bottom: 24px;
-          right: 24px;
-          width: 440px;
+          top: 15%;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 480px;
           max-width: 90vw;
           background: linear-gradient(135deg, #181926 0%, #281e3a 100%);
           border: 2px solid #ff79c6;
           border-radius: 12px;
-          padding: 18px 20px;
+          padding: 16px 20px;
           z-index: 999999;
           color: #f8f8f2;
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           animation: neonGlow 3s infinite ease-in-out;
-          transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+          box-shadow: 0 12px 35px rgba(0, 0, 0, 0.8), 0 0 20px rgba(255, 121, 198, 0.4);
           backdrop-filter: blur(12px);
+          user-select: auto;
+          transition: box-shadow 0.25s ease;
         }}
 
         .roast-floating-card:hover {{
-          transform: translateY(-6px) scale(1.02);
-          box-shadow: 0 16px 45px rgba(0, 0, 0, 0.8), 0 0 35px rgba(255, 121, 198, 0.85) !important;
+          box-shadow: 0 16px 45px rgba(0, 0, 0, 0.85), 0 0 35px rgba(255, 121, 198, 0.85) !important;
         }}
 
         .roast-floating-card:hover .roast-timer-bar {{
           animation-play-state: paused !important;
+        }}
+
+        .roast-drag-handle {{
+          cursor: grab;
+          user-select: none;
+          padding-bottom: 8px;
+          margin-bottom: 8px;
+          border-bottom: 1px solid rgba(255, 121, 198, 0.2);
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }}
+
+        .roast-drag-handle:active {{
+          cursor: grabbing;
         }}
 
         .rhyme-box {{
@@ -229,7 +247,7 @@ if roaster_enabled:
           border-left: 3px solid #ffd700;
           border-radius: 6px;
           padding: 10px 14px;
-          margin: 12px 0 10px 0;
+          margin: 10px 0;
           font-family: 'Georgia', serif;
           color: #f1fa8c;
           font-size: 0.95em;
@@ -238,11 +256,17 @@ if roaster_enabled:
         </style>
 
         <div class="roast-floating-card" id="roastCard">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <span style="font-size: 0.78em; font-weight: 800; color: #ff79c6; letter-spacing: 1.2px; text-transform: uppercase;">
-              🎪 LIVE ROAST BULLETIN • {model_name}
-            </span>
-            <span style="font-size: 0.75em; color: #8be9fd; font-family: monospace;">⏱️ {roast_ts}</span>
+          <div class="roast-drag-handle" id="roastDragHandle" title="Drag to reposition card on screen">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.1em; color: #ff79c6; cursor: grab;" title="Drag handle">⠿</span>
+              <span style="font-size: 0.78em; font-weight: 800; color: #ff79c6; letter-spacing: 1.2px; text-transform: uppercase;">
+                🎪 LIVE ROAST BULLETIN • {model_name}
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 0.75em; color: #8be9fd; font-family: monospace;">⏱️ {roast_ts}</span>
+              <button id="roastResetBtn" title="Reset card to center position" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 121, 198, 0.4); color: #f8f8f2; border-radius: 4px; font-size: 0.7em; padding: 2px 6px; cursor: pointer;">🎯 Center</button>
+            </div>
           </div>
           <div style="display: inline-block; background: #44475a; color: #50fa7b; font-size: 0.82em; font-weight: bold; padding: 2px 10px; border-radius: 12px; margin-bottom: 8px;">
             🎯 TARGET: {target_city.upper()} {emoji}
@@ -255,13 +279,175 @@ if roaster_enabled:
           </div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.75em; color: #8be9fd;">
             <span>⏱️ On-Air for {remaining_seconds}s (Hover to pause)</span>
-            <span style="color: #6272a4;">Every 4 mins</span>
+            <span style="color: #6272a4;">Drag header to move</span>
           </div>
           <div style="height: 4px; width: 100%; background: #282a36; border-radius: 2px; margin-top: 6px; overflow: hidden;">
             <div class="roast-timer-bar" style="height: 100%; width: 100%; background: linear-gradient(90deg, #ff79c6, #bd93f9); animation: progressShrink {remaining_seconds}s linear forwards;"></div>
           </div>
         </div>
         """, unsafe_allow_html=True)
+
+        components.html("""
+        <script>
+        (function() {
+          const pDoc = window.parent.document;
+          const pWin = window.parent;
+
+          if (window.frameElement) {
+            window.frameElement.style.display = 'none';
+            window.frameElement.style.height = '0px';
+            if (window.frameElement.parentElement) {
+              window.frameElement.parentElement.style.display = 'none';
+              window.frameElement.parentElement.style.height = '0px';
+            }
+          }
+
+          function setupDraggable() {
+            const card = pDoc.getElementById("roastCard");
+            const handle = pDoc.getElementById("roastDragHandle");
+            const resetBtn = pDoc.getElementById("roastResetBtn");
+
+            if (!card || !handle) {
+              setTimeout(setupDraggable, 50);
+              return;
+            }
+
+            // Restore position if previously saved
+            const saved = pWin.sessionStorage.getItem("roast_card_pos");
+            if (saved) {
+              try {
+                const pos = JSON.parse(saved);
+                if (pos.left !== undefined && pos.top !== undefined) {
+                  card.style.transform = "none";
+                  card.style.left = pos.left + "px";
+                  card.style.top = pos.top + "px";
+                }
+              } catch(e) {}
+            }
+
+            if (resetBtn) {
+              resetBtn.onclick = function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+                pWin.sessionStorage.removeItem("roast_card_pos");
+                card.style.transform = "translateX(-50%)";
+                card.style.left = "50%";
+                card.style.top = "15%";
+              };
+            }
+
+            handle.ondblclick = function(e) {
+              pWin.sessionStorage.removeItem("roast_card_pos");
+              card.style.transform = "translateX(-50%)";
+              card.style.left = "50%";
+              card.style.top = "15%";
+            };
+
+            let isDragging = false;
+            let startX = 0, startY = 0;
+            let origLeft = 0, origTop = 0;
+
+            function startDrag(clientX, clientY) {
+              isDragging = true;
+              startX = clientX;
+              startY = clientY;
+
+              const rect = card.getBoundingClientRect();
+              origLeft = rect.left;
+              origTop = rect.top;
+
+              card.style.transform = "none";
+              card.style.left = origLeft + "px";
+              card.style.top = origTop + "px";
+
+              handle.style.cursor = "grabbing";
+              card.style.cursor = "grabbing";
+              pDoc.body.style.userSelect = "none";
+            }
+
+            function moveDrag(clientX, clientY) {
+              if (!isDragging) return;
+              const dx = clientX - startX;
+              const dy = clientY - startY;
+
+              let newLeft = origLeft + dx;
+              let newTop = origTop + dy;
+
+              const maxLeft = pWin.innerWidth - card.offsetWidth - 10;
+              const maxTop = pWin.innerHeight - card.offsetHeight - 10;
+
+              newLeft = Math.max(10, Math.min(newLeft, maxLeft));
+              newTop = Math.max(10, Math.min(newTop, maxTop));
+
+              card.style.left = newLeft + "px";
+              card.style.top = newTop + "px";
+            }
+
+            function stopDrag() {
+              if (!isDragging) return;
+              isDragging = false;
+              handle.style.cursor = "grab";
+              card.style.cursor = "default";
+              pDoc.body.style.userSelect = "";
+
+              const rect = card.getBoundingClientRect();
+              pWin.sessionStorage.setItem("roast_card_pos", JSON.stringify({
+                left: Math.round(rect.left),
+                top: Math.round(rect.top)
+              }));
+            }
+
+            handle.onmousedown = function(e) {
+              if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+              e.preventDefault();
+              startDrag(e.clientX, e.clientY);
+            };
+
+            handle.ontouchstart = function(e) {
+              if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+              if (e.touches.length === 1) {
+                startDrag(e.touches[0].clientX, e.touches[0].clientY);
+              }
+            };
+
+            const onMouseMove = function(e) {
+              if (isDragging) {
+                e.preventDefault();
+                moveDrag(e.clientX, e.clientY);
+              }
+            };
+
+            const onTouchMove = function(e) {
+              if (isDragging && e.touches.length === 1) {
+                moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+              }
+            };
+
+            const onMouseUp = function(e) {
+              stopDrag();
+            };
+
+            if (pDoc._roastMouseMove) pDoc.removeEventListener("mousemove", pDoc._roastMouseMove);
+            if (pDoc._roastMouseUp) pDoc.removeEventListener("mouseup", pDoc._roastMouseUp);
+            if (pDoc._roastTouchMove) pDoc.removeEventListener("touchmove", pDoc._roastTouchMove);
+            if (pDoc._roastTouchEnd) pDoc.removeEventListener("touchend", pDoc._roastTouchEnd);
+
+            pDoc._roastMouseMove = onMouseMove;
+            pDoc._roastMouseUp = onMouseUp;
+            pDoc._roastTouchMove = onTouchMove;
+            pDoc._roastTouchEnd = onMouseUp;
+
+            pDoc.addEventListener("mousemove", onMouseMove);
+            pDoc.addEventListener("mouseup", onMouseUp);
+            pDoc.addEventListener("touchmove", onTouchMove, { passive: false });
+            pDoc.addEventListener("touchend", onMouseUp);
+          }
+
+          setupDraggable();
+        })();
+        </script>
+        """, height=0, width=0)
+
 else:
     st.sidebar.markdown("🎙️ **Live Roast Status**: ⏸️ Stopped (Disabled)")
 
