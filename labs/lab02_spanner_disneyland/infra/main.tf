@@ -15,12 +15,18 @@ terraform {
   }
 }
 
+# Retrieve project number dynamically
+data "google_project" "project" {
+  project_id = var.project_id
+}
+
 #--- 1. Enable Required APIs for this Lab ---
 resource "google_project_service" "enabled_apis" {
   for_each = toset([
     "spanner.googleapis.com",
     "bigquery.googleapis.com",
-    "bigqueryconnection.googleapis.com"
+    "bigqueryconnection.googleapis.com",
+    "aiplatform.googleapis.com"
   ])
   project            = var.project_id
   service            = each.key
@@ -37,6 +43,21 @@ resource "google_spanner_instance" "disneyland" {
   processing_units = 100
   force_destroy    = true
   depends_on       = [google_project_service.enabled_apis]
+}
+
+#--- 2b. Spanner Service Agent IAM for Vertex AI Integration ---
+resource "google_project_iam_member" "spanner_vertex_user" {
+  project    = var.project_id
+  role       = "roles/aiplatform.user"
+  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-spanner.iam.gserviceaccount.com"
+  depends_on = [google_project_service.enabled_apis, google_spanner_instance.disneyland]
+}
+
+resource "google_project_iam_member" "spanner_service_agent" {
+  project    = var.project_id
+  role       = "roles/spanner.serviceAgent"
+  member     = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-spanner.iam.gserviceaccount.com"
+  depends_on = [google_project_service.enabled_apis, google_spanner_instance.disneyland]
 }
 
 resource "google_spanner_database" "agent_lab" {
