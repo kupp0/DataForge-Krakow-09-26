@@ -7,13 +7,20 @@ In this codelab, you will build a zero-copy federated bridge linking **Cloud Spa
 ## 🎯 Lab Objectives
 * **🏗️ Infrastructure Review**: Peer behind the curtain at the pre-provisioned VPC network, Cloud Workstations, and Cloud Spanner architecture.
 * **🎡 Schema & Graph Setup**: Populate Disneyland attractions, connect path routes, and define a native Spanner Property Graph.
-* **🌉 Data Federation**: Bridge Spanner with BigQuery to run real-time analytical queries on live ride queues without copy-pasting data.
 * **🤖 MCP & Agent Integration**: Hook up the Google-managed Spanner MCP server to provide real-time graph data to your agents.
 * **🚀 Agentic Application Building**: Launch the **Antigravity CLI (agy)** to autonomously generate and run a FastAPI + HTML5 pathfinding web app.
+* **☁️ Cloud Run Deployment**: Instruct the agent to containerize and deploy your web application as a public Cloud Run service.
+* **🎢 Stress Testing & Dynamic Pricing**: Scale Cloud Spanner capacity and benchmark write throughput under simulated park load.
+* **🌉 Advanced Extensions**: Explore in-database vector embeddings and real-time BigQuery data federation.
+
+> [!TIP]
+> **Reading Guide**:
+> * `[TASK]`: Action required! Run a query, execute a command, or prompt an agent.
+> * `[UNDERSTAND]`: Background theory, architectural explanations, and deep dives. No immediate command execution required.
 
 ---
 
-## 🏗️ Phase 1: Infrastructure Provisioning (Terraform)
+## 🏗️ Phase 1: Infrastructure Provisioning (Terraform) `[UNDERSTAND]`
 
 The infrastructure is already deployed, if you are interested in the terraform code, you can find it in the [infrastructure](../../infrastructure) directory.
 
@@ -21,12 +28,19 @@ The infrastructure is already deployed, if you are interested in the terraform c
 
 ## 🗄️ Phase 2: Schema Creation & Data Ingestion
 
-Populate Spanner database **`agent-lab`** with tables and data.
+Populate Spanner database **`agent-lab`** with tables, graph definitions, and seed data.
 
 1. Go to the **Cloud Spanner** page in the Google Cloud Console.
 2. Click on your Spanner instance **`disneyland`**, and then select database **`agent-lab`**.
 3. In the left sidebar, click **Spanner Studio**.
-4. Open a new query tab, paste the SQL script below, and click **Run**:
+4. Open a new query tab, paste the SQL scripts below, and click **Run**:
+
+### 🎯 Step 1: Define Tables & Property Graph (DDL) `[TASK]`
+
+Copy and run the schema definition in Spanner Studio:
+
+<details>
+<summary><b>▶ Click to expand Table & Property Graph Schema (DDL)</b></summary>
 
 ```sql
 -- 1. Create DisneylandPark Table
@@ -68,7 +82,19 @@ CREATE OR REPLACE PROPERTY GRAPH DisneylandGraph
       SOURCE KEY (SourceAttractionID) REFERENCES Attraction (AttractionID)
       DESTINATION KEY (TargetAttractionID) REFERENCES Attraction (AttractionID)
   );
+```
+</details>
 
+---
+
+### 🎯 Step 2: Seed Park Attractions & Walkway Topology (DML) `[TASK]`
+
+Click the dropdown below to expand, copy the seed script, and run it in Spanner Studio:
+
+<details>
+<summary><b>▶ Click to expand Disneyland Seed Data (Parks, Attractions, Walkway Paths)</b></summary>
+
+```sql
 -- 5. Insert DisneylandPark Records
 INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (1, 'Disneyland Park (Paris)', 'Paris, France');
 INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (2, 'Walt Disney Studios Park', 'Paris, France');
@@ -77,7 +103,6 @@ INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (4, 'Disney Californi
 INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (5, 'Tokyo Disneyland', 'Tokyo, Japan');
 
 -- 6. Insert Attraction Records
-
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (1, 1, 'Disneyland Railroad Station', 'Main Street, U.S.A.', 'Transport', 'Board a vintage steam train for a scenic journey around the park.');
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (2, 1, 'Horse-Drawn Streetcars', 'Main Street, U.S.A.', 'Transport', 'Enjoy a nostalgic ride down Main Street in a turn-of-the-century streetcar.');
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (3, 1, 'Main Street Vehicles', 'Main Street, U.S.A.', 'Transport', 'Travel in style aboard a variety of vintage vehicles, like a fire engine or omnibus.');
@@ -129,7 +154,6 @@ INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VAL
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (50, 1, 'Videopolis Theatre', 'Discoveryland', 'Show', 'A huge indoor venue for live shows, often with a nearby restaurant.');
 
 -- 7. Insert Path Records
-
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (1, 2, 70);
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (1, 3, 60);
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (2, 1, 70);
@@ -247,26 +271,11 @@ INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (50, 45, 40);
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (50, 49, 50);
 ```
+</details>
 
 ---
 
-## 🌉 Phase 3: Real-Time Bridge Verification Query
-
-Verify the zero-copy federated bridge by querying Spanner tables directly from BigQuery Studio:
-
-1. Open **BigQuery Studio** in the Google Cloud Console.
-2. In the left **Explorer** panel, expand your project to locate the mapped **`disneyland_spanner_external`** dataset.
-3. Open a new SQL tab, paste the following query (replace `YOUR_PROJECT_ID`), and click **Run**:
-
-```sql
-SELECT * 
-FROM `YOUR_PROJECT_ID.disneyland_spanner_external.Attraction` 
-LIMIT 5;
-```
-
----
-
-## 🎛️ Phase 4: Model Context Protocol (MCP) Agent Registry Verification
+## 🎛️ Phase 3: Model Context Protocol (MCP) Agent Registry Verification `[TASK]`
 
 Spanner is automatically registered as a Google-managed MCP Server in the Gemini Agent Platform (formerly VertexAI) **Agent Registry** once active.
 
@@ -285,11 +294,13 @@ To verify the registry connection:
 
 ---
 
-## 🚀 Phase 5: Building the Agentic Application
+## 🚀 Phase 4: Building the Agentic Application
 
-Use the **Antigravity CLI (agy)** in your Cloud Workstation to generate a complete web app (FastAPI backend and HTML5 frontend) that leverages **Spanner Graph** pathfinding.
+Time to roll up your sleeves and get your hands dirty—**this is where the real fun begins!** 🛠️✨
 
-### 📂 1. Open the Project Folder & Terminal in Cloud Workstations
+With your database seeded and the MCP server connected, you'll put the **Antigravity CLI (`agy`)** into the driver's seat to autonomously architect, implement, and run a complete AI-driven Disneyland pathfinding web application (FastAPI backend + interactive HTML5 frontend) powered by **Spanner Property Graph** queries.
+
+### 📂 Step 1: Open the Project Folder & Terminal in Cloud Workstations `[TASK]`
 
 1. Launch your workstation instance from the Cloud Workstations page.
 2. In the editor, select **File** -> **Open Folder**, enter `/home/user/labs/lab02_spanner_disneyland`, and click **OK**.
@@ -299,7 +310,7 @@ Use the **Antigravity CLI (agy)** in your Cloud Workstation to generate a comple
 
 ---
 
-### 🔑 2. Authenticate the Terminal & Set Active Project
+### 🔑 Step 2: Authenticate the Terminal & Set Active Project `[TASK]`
 
 Authenticate both the `gcloud` CLI and Application Default Credentials (ADC) if they are not already set:
 
@@ -323,7 +334,7 @@ gcloud config set project <YOUR_PROJECT_ID>
 > 1. **Terminal / ADC (`gcloud auth login --update-adc`)**: Enables python scripts and MCP tools to access Spanner and Vertex AI.
 > 2. **Antigravity CLI (`agy`)**: Authenticates your developer session using your assigned Google Cloud project ID.
 
-### ⚙️ 3. Initialize the Antigravity CLI
+### ⚙️ Step 3: Initialize the Antigravity CLI `[TASK]`
 
 Navigate to the lab directory and launch the CLI with permissions auto-approved:
 ```bash
@@ -345,7 +356,7 @@ Verify MCP connectivity:
 
 ---
 
-### 🎯 4. Prompting Antigravity to Generate the Agentic Application
+### 🤖 Step 4: Prompting Antigravity to Generate the Agentic Application `[TASK]`
 
 Paste the following developer prompt into the active `agy` CLI session:
 
@@ -381,19 +392,17 @@ Startup & Validation (setup.sh):
 - Automated bash script that detects and activates existing 'venv' if present (otherwise creates one), ensures dependencies (fastapi, uvicorn, google-cloud-spanner, google-adk) are installed, runs app.py via uvicorn on 0.0.0.0:8000, and opens http://localhost:8000.
 
 Instructions for Agent:
-1. Research existing custom skills in `.agents/skills/` (`spanner-graph` and `vertex-config`) and verify Spanner database schema before coding.
+1. Research existing custom skills in `.agents/skills/` (`spanner-graph`, `vertex-config`, and `cloud-run-deploy`) and verify Spanner database schema before coding.
 2. Produce implementation_plan.md for approval.
 3. Write app.py, index.html, and setup.sh.
 ```
 
----
-
-### 🧩 5. Understanding the `agy` CLI Development Workflow
-
-The agent operates in three distinct phases:
-1. **Planning (Implementation Plan)**: The agent creates an architecture plan (`implementation_plan.md`) for your review. If auto-approve is off, type `yes` to proceed.
-2. **Execution**: The agent writes the backend FastAPI app (`app.py`), the frontend client (`index.html`), and a startup script (`setup.sh`).
-3. **Walkthrough**: The agent outputs a final `walkthrough.md` report explaining the generated components.
+> [!TIP]
+> **Understanding the `agy` CLI Development Workflow**:
+> The agent operates in three distinct phases:
+> 1. **Planning (Implementation Plan)**: The agent creates an architecture plan (`implementation_plan.md`) for your review. If auto-approve is off, type `yes` to proceed.
+> 2. **Execution**: The agent writes the backend FastAPI app (`app.py`), the frontend client (`index.html`), and a startup script (`setup.sh`).
+> 3. **Walkthrough**: The agent outputs a final `walkthrough.md` report explaining the generated components.
 
 > [!IMPORTANT]
 > **Known Limitation: File Links in Terminals**:
@@ -401,7 +410,7 @@ The agent operates in three distinct phases:
 
 ---
 
-### 💻 6. Run and Explore the Application
+### 💻 Step 5: Run and Explore the Application `[TASK]`
 
 Once the agent completes the code generation:
 
@@ -417,7 +426,39 @@ Once the agent completes the code generation:
 
 ---
 
-### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood
+### ☁️ Step 6: Deploying to Google Cloud Run with Antigravity `[TASK]`
+
+Now that the Navigator works locally in your workstation, deploy it to **Google Cloud Run** to share a live, publicly accessible URL with your team.
+
+#### 1. Instruct Antigravity to Containerize & Deploy
+
+In your active `agy` CLI session, prompt the agent:
+
+```text
+Containerize the Disneyland Navigator application and deploy it to Google Cloud Run:
+1. Review the custom skill in `.agents/skills/cloud-run-deploy/SKILL.md`.
+2. Ensure `app.py` binds to host `0.0.0.0` and dynamically reads `PORT` from `os.environ.get("PORT", 8080)`.
+3. Create a production-ready `Dockerfile` (using `python:3.11-slim`) and `.dockerignore`.
+4. Run `gcloud run deploy disneyland-navigator --source . --region europe-west1 --allow-unauthenticated --set-env-vars GOOGLE_CLOUD_LOCATION=global,GOOGLE_GENAI_USE_VERTEXAI=true --quiet`.
+5. Output the live public service URL.
+```
+
+> [!NOTE]
+> Cloud Run automatically packages the source code using Cloud Build and provisions the managed container in region `europe-west1`. This step takes roughly 1.5–2 minutes.
+
+#### 2. Test Your Live Cloud Run Application
+
+Once `agy` outputs the service URL (e.g. `https://disneyland-navigator-xxxxx-ew.a.run.app`):
+1. Click the URL or open it in your browser.
+2. Select attractions in the **Interactive Route Finder** to verify graph navigation.
+3. Open the **Chat Terminal** to verify the GenAI agent connects to Vertex AI and queries Spanner.
+
+> [!TIP]
+> **Leaderboard Points & Badges**: Successfully deploying your Cloud Run service awards **100 base points** on the central leaderboard, plus a **Pioneer Speed Bonus** (up to **+50 points** for early deployments), and unlocks the **☁️ Cloud Pilot** and **⚡ Sonic Deployer** badges!
+
+---
+
+### 🧭 Step 7: Deep Dive: Spanner Graph Queries under the Hood `[UNDERSTAND]`
 
 The agent uses native **Spanner Graph** queries (via the `GRAPH_TABLE` function) to traverse the property graph. For example:
 
@@ -437,19 +478,19 @@ This zero-copy graph traversal avoids the overhead of syncing data to a separate
 
 ---
 
-## 🎢 Phase 6: Challenge Task — Dynamic Pricing, Attraction Executions & Live Leaderboard
+## 🎢 Phase 5: Challenge Task — Dynamic Pricing, Attraction Executions & Live Leaderboard
 
 Welcome to the competitive park simulation! In this phase, you will extend Disneyland's data model to simulate live attraction execution runs, track ticket revenue, and optimize pricing under economic demand constraints.
 
 The global hackathon admin leaderboard continuously monitors your Spanner database and awards team points for DDL completion, data throughput, and optimized park revenue.
 
-### 1. Execute Spanner Schema Extension (DDL)
+### 🎯 Step 1: Execute Spanner Schema Extension (DDL) `[TASK]`
 
 Open **Spanner Studio** in your database `agent-lab` and run the following DDL script:
 
 ```sql
 -- =============================================================================
--- Phase 6 Challenge: Attraction Executions & Dynamic Pricing Engine
+-- Phase 5 Challenge: Attraction Executions & Dynamic Pricing Engine
 -- =============================================================================
 
 CREATE TABLE AttractionRun (
@@ -468,30 +509,30 @@ CREATE INDEX Idx_AttractionRun_Timestamp
 ```
 
 > [!TIP]
-> **Spanner Best Practices Applied**:
+> **Spanner Architecture Best Practices Applied**:
 > * **Interleaving**: Child `AttractionRun` records are stored physically adjacent to their parent `Attraction` row on the same split, enabling zero-network-hop local joins.
 > * **Bit-Reversed Identity**: Primary key `RunID` avoids write hotspotting during high-concurrency simulation and load testing.
 > * **TrueTime Commit Timestamp**: Server-authoritative timestamps using `PENDING_COMMIT_TIMESTAMP()`.
 > * **NUMERIC & Covering Index**: Financial fields use exact numeric precision, and `STORING (TicketPrice)` enables index-only scans for price and revenue evaluation.
 
-### 2. The Disneyland Economic Intelligence: Price Elasticity & Physical Capacity
+---
+
+### 📖 Concept: Disneyland Economic Intelligence & Workload Scenarios `[UNDERSTAND]`
 
 The central event leaderboard evaluates your park revenue based on real-world **price elasticity** combined with **physical park capacity constraints**:
 
-* **Physical Park Capacity Limit**: Disneyland parks have a physical turnstile admission threshold of **85,000 daily guests**. Even if attraction rides execute hundreds of thousands of times during a stress test, physical park visitor admissions are capped at 85,000, setting a realistic revenue ceiling of **~$1.5M to $3.5M per day**.
-* **Price Elasticity Mechanics**:
-  * **Benchmark Price**: `$15.00` yields standard turnout (80 visitors per run on a 100-capacity attraction).
-  * **Sweet Spot Window**: Most successful parks operate in the **`$12.00` to `$25.00`** pricing window.
-  * **Beware the Extremes**:
-    * **Luxury Trap ($\ge \$35.00$)**: Demand collapses to 0. Empty rides generate \$0 while incurring facility overhead (*Luxury Trap* badge).
-    * **Bargain Basement ($< \$8.00$)**: Rides operate at 100% capacity, but thin profit margins barely cover operating costs (*Bargain Basement* badge).
-* **Operational Turnover Bonus**: Beyond the 85,000 admission cap, high run volumes represent high operational efficiency and crowd circulation, earning an operational micro-spend bonus ($0.025/run) without distorting park economic realism.
+| Parameter | Value / Window | Economic Impact |
+| :--- | :--- | :--- |
+| **Physical Admission Cap** | 85,000 daily guests | Sets realistic park revenue ceiling (~$1.5M to $3.5M/day). |
+| **Sweet Spot Price** | **`$12.00` – `$25.00`** | Maximizes gross revenue and attendance balance. |
+| **Luxury Trap** | **$\ge \$35.00$** | Demand collapses to 0 (*Luxury Trap* badge, $0 revenue). |
+| **Bargain Basement** | **$< \$8.00$** | 100% full rides, but razor-thin profit margins. |
+| **Operational Turnover** | High run volumes | $0.025/run crowd circulation bonus beyond admission cap. |
 
----
+<details>
+<summary><b>▶ Click to explore High-Write Workload Scenarios (IoT Sensors, MagicBand Pings, Virtual Queues)</b></summary>
 
-### 3. Advanced High-Write Stress Testing: What Workloads to Simulate?
-
-While physical visitor attendance is capped, modern Disney parks process tens of millions of high-throughput transactions every day. To test Cloud Spanner's limits (saturating CPU, maxing out QPS, and stress-testing multi-split scalability), participants can simulate these high-write workloads:
+While physical visitor attendance is capped, modern Disney parks process tens of millions of high-throughput transactions every day. To test Cloud Spanner's limits (saturating CPU, maxing out QPS, and stress-testing multi-split scalability), consider these high-write workloads:
 
 1. **🎢 High-Frequency Attraction Runs (`AttractionRun`)**:
    * Simulates continuous ride vehicle dispatches across all lands.
@@ -510,9 +551,11 @@ While physical visitor attendance is capped, modern Disney parks process tens of
    * Simulates 20,000 guests simultaneously attempting to book Space Mountain Lightning Lanes in a 5-second window.
    * **Spanner Architecture Key**: Tests **lock contention, optimistic concurrency, and transaction conflict handling** (`SPANNER_SYS.LOCK_STATS_TOP_10MINUTE`).
 
+</details>
+
 ---
 
-### 4. Prompt `agy` in your Workstation VM to Build & Run the Load Stress-Test Tool
+### 🎯 Step 2: Build & Run the Load Benchmark with `agy` `[TASK]`
 
 Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner stress-testing tool (`spanner_stress_test.py`) against your instance:
 
@@ -532,7 +575,7 @@ With `--dangerously-skip-permissions`, `agy` will generate the implementation pl
 
 ---
 
-### 5. Monitor Spanner Health & Watch the Global Leaderboard
+### 📊 Step 3: Monitor Spanner Health & Watch the Global Leaderboard `[TASK]`
 
 During and immediately following your load test:
 
@@ -551,31 +594,43 @@ During and immediately following your load test:
 
 ---
 
-### 6. Lesson Learned: The Park Architect's Dilemma — Vertical Scaling (Throughput vs. CPU Meltdown)
+### ⚡ Step 4: Vertical Scaling & Maximizing Throughput `[TASK]`
 
 Now that you have run your initial load test against the baseline instance, evaluate the observed performance:
 
 * **The Baseline Bottleneck**: By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node). Under multi-threaded concurrent ingestion, 100 PUs saturate rapidly at 100% CPU. When saturated, Spanner queues incoming requests, write latencies spike, throughput plateaus, and you likely triggered the **🔥 Spanner Meltdown** badge on the leaderboard.
 * **The Scaling Lever (Vertical Scaling)**: In Cloud Spanner, compute capacity can be scaled vertically on-the-fly with zero downtime, zero data repartitioning delays, and without dropping database connections. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more compute capacity.
-* **Step 1: Vertically Scale Spanner PUs**:
-  Run this command in your terminal to scale your instance compute capacity (e.g., to 500 or 1000 PUs):
-  ```bash
-  # Scale your instance to 500 or 1000 PUs for high-throughput ingestion
-  gcloud spanner instances update disneyland --processing-units=500
-  ```
-* **Step 2: Re-Run Load Test with Higher Concurrency**:
-  With 500+ PUs provisioned, re-run the Python load test script with increased concurrency to saturate the new capacity:
-  ```bash
-  python3 spanner_load_test.py --threads 16 --duration-seconds 90
-  ```
+
+#### 1. Vertically Scale Spanner PUs
+Run this command in your terminal to scale your instance compute capacity (e.g., to 500 or 1000 PUs):
+```bash
+# Scale your instance to 500 or 1000 PUs for high-throughput ingestion
+gcloud spanner instances update disneyland --processing-units=500
+```
+
+#### 2. Re-Run Load Test with Higher Concurrency
+With 500+ PUs provisioned, re-run the Python load test script with increased concurrency to saturate the new capacity:
+```bash
+python3 spanner_load_test.py --threads 16 --duration-seconds 90
+```
 
 > [!TIP]
 > **Leaderboard Strategy**: The central dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**. Scaling beyond the baseline awards bonus points and unlocks the **⚡ Hyperscale Operator** ($\ge$ 500 PUs) and **🚀 Throughput Titan** ($\ge$ 100 runs/sec) badges!
 
 ---
 
-## 🔧 Phase 7: Pro-Tips & Advanced Extensions
+## 🔧 Phase 6: Pro-Tips & Advanced Extensions `[UNDERSTAND]`
 
+* **🌉 Real-Time BigQuery Data Federation (Optional)**:
+  Cloud Spanner can be queried directly from BigQuery via zero-copy external datasets without exporting or syncing data:
+  1. Open **BigQuery Studio** in the Google Cloud Console.
+  2. In the left **Explorer** panel, expand your project to locate the mapped **`disneyland_spanner_external`** dataset.
+  3. Open a new SQL tab, paste the query below (replace `<YOUR_PROJECT_ID>`), and click **Run**:
+     ```sql
+     SELECT AttractionID, Name, Land, Type
+     FROM `<YOUR_PROJECT_ID>.disneyland_spanner_external.Attraction`
+     LIMIT 10;
+     ```
 * **📊 Architecture Visualization (PlantUML)**: Ask `agy` to generate a PlantUML sequence diagram showing request flow from frontend to Spanner (`agy "Generate a PlantUML sequence diagram for our app"`).
 * **🔍 In-Database Vector Embeddings & Semantic Search**:
   Notice that the initial data ingestion in Phase 2 left `Attraction.Embedding` unpopulated (`NULL`). Before running vector searches, you must generate embeddings for attraction descriptions. Cloud Spanner natively supports [in-database embedding generation and backfills](https://cloud.google.com/spanner/docs/backfill-embeddings) via remote Vertex AI model integration, eliminating the need to pull raw text into client applications.
@@ -602,9 +657,9 @@ Now that you have run your initial load test against the baseline instance, eval
   > 4. Test the generated embeddings with a semantic similarity query finding the top 5 attractions matching 'spooky haunted mansion and ghosts'."
   > ```
 
-  **Manual Spanner Studio Steps (Alternative)**:
-  If you prefer executing the queries directly in **Spanner Studio**:
-  
+  <details>
+  <summary><b>▶ Click to view Manual Spanner Studio SQL (Alternative to agy)</b></summary>
+
   1. **Register the Remote Vertex AI Model**:
      ```sql
      CREATE OR REPLACE MODEL TextMultilingualEmbeddingGekko
@@ -645,6 +700,7 @@ Now that you have run your initial load test against the baseline instance, eval
      ) ASC
      LIMIT 5;
      ```
+  </details>
 * **⚡ Lock Contention Diagnostics**: If seeing write timeouts under heavy load, check Spanner lock contention:
   ```sql
   SELECT * FROM SPANNER_SYS.LOCK_STATS_TOP_10MINUTE;

@@ -83,10 +83,12 @@ def calculate_attraction_run_metrics(ticket_price: float, runs: int, raw_visitor
 def compute_participant_score(
     data: Dict[str, Any], 
     max_revenue_in_event: float = 1.0,
-    earliest_run_timestamp: Any = None
+    earliest_run_timestamp: Any = None,
+    earliest_cloud_run_timestamp: Any = None,
+    cloud_run_rank: int = 0
 ) -> Dict[str, Any]:
     """
-    Computes composite hackathon score (0 - 1100) including TrueTime speed bonus and awards badges.
+    Computes composite hackathon score (0 - 1250) including TrueTime and Cloud Run speed bonuses, and awards badges.
     """
     tables = data.get("tables", [])
     row_count = data.get("total_rows", 0)
@@ -98,6 +100,9 @@ def compute_participant_score(
     qps = data.get("qps", 0.0)
     runs = data.get("runs", 0)
     first_run_timestamp = data.get("first_run_timestamp")
+    has_cloud_run = data.get("has_cloud_run", False)
+    cloud_run_status = data.get("cloud_run_status", "NONE")
+    cr_create_time = data.get("cloud_run_create_time")
     
     # 1. Technical Core DDL Points (Max 300 pts)
     core_tables = ["disneylandpark", "attraction", "path"]
@@ -154,8 +159,49 @@ def compute_participant_score(
                 speed_bonus = 50
         else:
             speed_bonus = 100
+
+    # 9. Cloud Run Application Deployment (Max 100 base pts)
+    cloud_run_score = 0
+    if has_cloud_run:
+        if cloud_run_status == "READY":
+            cloud_run_score = 100
+        elif cloud_run_status == "DEGRADED":
+            cloud_run_score = 75
+        elif cloud_run_status == "DEPLOYING":
+            cloud_run_score = 50
+        else:
+            cloud_run_score = 100
+
+    # 10. Cloud Run Pioneer / Relative Speed Bonus (Max 50 bonus pts)
+    # Rewards early deployments with relative score deviation across the fleet.
+    cloud_run_bonus = 0
+    if has_cloud_run:
+        rank_bonuses = {1: 50, 2: 40, 3: 30, 4: 20, 5: 15}
+        if cloud_run_rank in rank_bonuses:
+            base_rank_bonus = rank_bonuses[cloud_run_rank]
+        elif 0 < cloud_run_rank <= 10:
+            base_rank_bonus = 10
+        elif cloud_run_rank > 10:
+            base_rank_bonus = 5
+        else:
+            base_rank_bonus = 25
+
+        if cr_create_time and earliest_cloud_run_timestamp is not None:
+            try:
+                diff_sec = (cr_create_time - earliest_cloud_run_timestamp).total_seconds()
+                diff_min = max(0.0, diff_sec / 60.0)
+                time_decay = int(diff_min * 0.5)
+                cloud_run_bonus = max(5, base_rank_bonus - time_decay)
+            except Exception:
+                cloud_run_bonus = base_rank_bonus
+        else:
+            cloud_run_bonus = base_rank_bonus
         
-    total_score = ddl_score + graph_score + row_score + extended_score + scaling_score + throughput_score + biz_score + speed_bonus
+    total_score = (
+        ddl_score + graph_score + row_score + extended_score + 
+        scaling_score + throughput_score + biz_score + speed_bonus + 
+        cloud_run_score + cloud_run_bonus
+    )
     
     # Badges
     badges = []
@@ -169,6 +215,10 @@ def compute_participant_score(
         badges.append(("🚀", "Throughput Titan", f"High write velocity ({qps:.1f} runs/sec)"))
     if cpu_util > 50.0:
         badges.append(("🔥", "Spanner Meltdown", f"Pushing Spanner hard ({cpu_util:.1f}% CPU)"))
+    if has_cloud_run:
+        badges.append(("☁️", "Cloud Pilot", "Disneyland Navigator deployed & live on Cloud Run"))
+    if cloud_run_bonus >= 40:
+        badges.append(("⚡", "Sonic Deployer", f"Pioneer Cloud Run deployment (+{cloud_run_bonus} pts)"))
     if speed_bonus >= 75:
         badges.append(("⚡", "Speed Demon", f"First-mover execution velocity (+{speed_bonus} pts)"))
     if found_core == 0 and row_count == 0:
@@ -188,6 +238,9 @@ def compute_participant_score(
         "throughput_score": throughput_score,
         "biz_score": biz_score,
         "speed_bonus": speed_bonus,
+        "cloud_run_score": cloud_run_score,
+        "cloud_run_bonus": cloud_run_bonus,
+        "cloud_run_total": cloud_run_score + cloud_run_bonus,
         "badges": badges
     }
 

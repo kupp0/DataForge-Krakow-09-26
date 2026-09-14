@@ -26,7 +26,10 @@ resource "google_project_service" "enabled_apis" {
     "spanner.googleapis.com",
     "bigquery.googleapis.com",
     "bigqueryconnection.googleapis.com",
-    "aiplatform.googleapis.com"
+    "aiplatform.googleapis.com",
+    "run.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "artifactregistry.googleapis.com"
   ])
   project            = var.project_id
   service            = each.key
@@ -120,4 +123,29 @@ resource "google_bigquery_dataset" "spanner_external_dataset" {
   }
   
   depends_on = [time_sleep.wait_for_iam]
+}
+
+#--- 6. Cloud Run & Cloud Build Participant and Service Account IAM ---
+resource "google_project_iam_member" "participant_run_admin" {
+  project = var.project_id
+  role    = "roles/run.admin"
+  member  = var.iap_member
+}
+
+resource "google_project_iam_member" "participant_sa_user" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountUser"
+  member  = var.iap_member
+}
+
+resource "google_project_iam_member" "compute_sa_cloud_run_roles" {
+  for_each = toset([
+    "roles/storage.admin",
+    "roles/logging.logWriter",
+    "roles/artifactregistry.writer"
+  ])
+
+  project = var.project_id
+  role    = each.key
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }

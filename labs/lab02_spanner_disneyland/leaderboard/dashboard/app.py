@@ -1158,23 +1158,26 @@ def render_live_telemetry_board(
         roast_hud_placeholder.empty()
 
     # Summary Metrics Row
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     total_participants = len(df)
     top_city = df.iloc[0]["city"] if not df.empty else "N/A"
     total_rows = (df["total_rows"] + (df["runs"] if "runs" in df.columns else 0)).sum() if not df.empty else 0
     total_revenue = df["revenue"].sum() if not df.empty else 0.0
     peak_cpu = df["cpu_utilization_pct"].max() if not df.empty else 0.0
+    total_cloud_runs = sum(1 for r in data if r.get("has_cloud_run"))
 
     with col1:
         st.metric("Active Cities", f"{total_participants} Parks")
     with col2:
         st.metric("Leading City", f"🥇 {top_city}")
     with col3:
-        st.metric("Total Spanner Rows", f"{total_rows:,}")
+        st.metric("Cloud Run Apps", f"🚀 {total_cloud_runs} / {total_participants} Live")
     with col4:
-        st.metric("Total Disney Revenue", f"${total_revenue:,.2f}")
+        st.metric("Total Spanner Rows", f"{total_rows:,}")
     with col5:
+        st.metric("Total Disney Revenue", f"${total_revenue:,.2f}")
+    with col6:
         st.metric("Peak Spanner CPU", f"{peak_cpu:.1f}%")
 
     st.divider()
@@ -1200,13 +1203,23 @@ def render_live_telemetry_board(
             for r in data:
                 rank_icon = "🥇" if r["rank"] == 1 else ("🥈" if r["rank"] == 2 else ("🥉" if r["rank"] == 3 else f"#{r['rank']}"))
                 badge_str = " ".join([f"{b[0]} {b[1]}" for b in r.get("badges", [])])
-            
+                
+                cr_pts = r.get("cloud_run_score", 0) + r.get("cloud_run_bonus", 0)
+                cr_display = f"🚀 Live (+{cr_pts} pts)" if r.get("has_cloud_run") else "⏳ Pending"
+                
+                spanner_speed = r.get("speed_bonus", 0)
+                cr_speed = r.get("cloud_run_bonus", 0)
+                total_speed = spanner_speed + cr_speed
+                speed_str = f"+{total_speed} pts" if total_speed > 0 else "—"
+
                 display_rows.append({
                     "Rank": rank_icon,
                     "City": r["city"],
                     "Project": r["project_id"],
                     "Score": r["score"],
-                    "Speed Bonus": f"+{r.get('speed_bonus', 0)} pts" if r.get('speed_bonus', 0) > 0 else "—",
+                    "Cloud Run": cr_display,
+                    "App URL": r.get("cloud_run_url") if r.get("has_cloud_run") and r.get("cloud_run_url") else None,
+                    "Speed Bonus": speed_str,
                     "Revenue": f"${r['revenue']:,.2f}",
                     "Ticket Price": f"${r['ticket_price']:.2f}" if r['ticket_price'] > 0 else "Not set",
                     "Compute": f"{r.get('processing_units', 100)} PUs" if r.get('processing_units', 100) < 1000 else f"{r.get('processing_units', 100)//1000} Node ({r.get('processing_units', 100)} PUs)",
@@ -1226,33 +1239,39 @@ def render_live_telemetry_board(
                 hide_index=True,
                 column_config={
                     "Score": st.column_config.ProgressColumn(
-                        "Total Score (Max 1100)",
+                        "Total Score (Max 1250)",
                         min_value=0,
-                        max_value=1100,
+                        max_value=1250,
                         format="%d"
+                    ),
+                    "App URL": st.column_config.LinkColumn(
+                        "Live Web App",
+                        display_text="Open ↗"
                     )
                 }
             )
 
         # Awards Showcase
         st.markdown("### 🎖️ Hall of Fame & Badges")
-        b_col1, b_col2, b_col3, b_col4 = st.columns(4)
+        b_col1, b_col2, b_col3, b_col4, b_col5 = st.columns(5)
     
         # Find award winners
         architects = [r["city"] for r in data if any(b[1] == "Castle Architect" for b in r.get("badges", []))]
+        cloud_pilots = [r["city"] for r in data if any(b[1] == "Cloud Pilot" for b in r.get("badges", []))]
         hyperscalers = [r["city"] for r in data if any(b[1] == "Hyperscale Operator" for b in r.get("badges", []))]
         titans = [r["city"] for r in data if any(b[1] == "Throughput Titan" for b in r.get("badges", []))]
-        meltdowns = [r["city"] for r in data if any(b[1] == "Spanner Meltdown" for b in r.get("badges", []))]
         highest_rev = df.sort_values(by="revenue", ascending=False).iloc[0]["city"] if not df.empty and df["revenue"].max() > 0 else "None"
     
         with b_col1:
             st.info(f"**🏰 Castle Architects**\n\n{', '.join(architects) if architects else 'No city has completed the graph yet.'}")
         with b_col2:
-            st.success(f"**💰 Disney Tycoon**\n\n🏆 **{highest_rev}** (Top revenue)")
+            st.success(f"**☁️ Cloud Pilots**\n\n{', '.join(cloud_pilots) if cloud_pilots else 'No Cloud Run apps deployed yet.'}")
         with b_col3:
-            st.info(f"**⚡ Hyperscalers (Scaled PUs)**\n\n{', '.join(hyperscalers) if hyperscalers else 'All parks on 100 PUs.'}")
+            st.success(f"**💰 Disney Tycoon**\n\n🏆 **{highest_rev}** (Top revenue)")
         with b_col4:
-            st.warning(f"**🔥 Stress Testers (High Load)**\n\n{', '.join(meltdowns) if meltdowns else (', '.join(titans) if titans else 'All Spanner instances quiet.')}")
+            st.info(f"**⚡ Hyperscalers**\n\n{', '.join(hyperscalers) if hyperscalers else 'All parks on 100 PUs.'}")
+        with b_col5:
+            st.warning(f"**🚀 Throughput Titans**\n\n{', '.join(titans) if titans else 'All instances quiet.'}")
 
     with tab_business:
         st.subheader("🎢 Price Elasticity & Revenue Optimization")
@@ -1316,6 +1335,7 @@ def render_live_telemetry_board(
             for r in data:
                 runs_count = r.get("runs", 0)
                 has_run_table = any(ext in " ".join(r["tables"]).lower() for ext in ["run", "execution"]) or runs_count > 0
+                cr_pts = r.get("cloud_run_score", 0) + r.get("cloud_run_bonus", 0)
                 schema_rows.append({
                     "City": r["city"],
                     "Project": r["project_id"],
@@ -1323,13 +1343,25 @@ def render_live_telemetry_board(
                     "Attraction": "✅" if any(t.lower() == "attraction" for t in r["tables"]) else "❌",
                     "Path": "✅" if any(t.lower() == "path" for t in r["tables"]) else "❌",
                     "DisneylandGraph": "✅" if r["has_graph"] else "❌",
+                    "Cloud Run App": f"🚀 Live (+{cr_pts} pts)" if r.get("has_cloud_run") else "⏳ Pending",
+                    "App URL": r.get("cloud_run_url") if r.get("has_cloud_run") and r.get("cloud_run_url") else None,
                     "AttractionRun (Challenge)": "✅" if has_run_table else "⏳ Pending",
                     "Attraction Runs": runs_count,
                     "Base Rows": r["total_rows"],
                     "Total Rows": r["total_rows"] + runs_count
                 })
         
-            st.dataframe(pd.DataFrame(schema_rows), use_container_width=True, hide_index=True)
+            st.dataframe(
+                pd.DataFrame(schema_rows), 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "App URL": st.column_config.LinkColumn(
+                        "Live Web App",
+                        display_text="Open ↗"
+                    )
+                }
+            )
 
     # --- TAB 5: Disneyland Park Closing Ceremony ---
     with tab_ceremony:

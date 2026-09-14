@@ -18,19 +18,21 @@ The Admin Leaderboard is a centralized, real-time observability and gamification
 
 ## 2. Scoring System & Weightings
 
-Each participant team competes for a base score of **1,000 Points** plus up to **100 Speed Velocity Bonus Points** (Max Composite Score: **1,100 Points**). Points are calculated deterministically across 8 distinct dimensions:
+Each participant team competes for a base score of **1,100 Points** plus up to **150 Speed & Pioneer Bonus Points** (Max Composite Score: **1,250 Points**). Points are calculated deterministically across 10 distinct dimensions:
 
 | Category | Max Points | Measurement Target | Evaluation Logic |
 | :--- | :---: | :--- | :--- |
 | **Core DDL** | **300** | Standard relational schema | 100 pts each for `DisneylandPark`, `Attraction`, and `Path` tables. |
 | **Spanner Graph DDL** | **100** | Property Graph definition | 100 pts if `DisneylandGraph` is defined in `INFORMATION_SCHEMA.PROPERTY_GRAPHS`. |
 | **Data Population** | **100** | Row volume in core tables | Scaled linearly up to 50 rows (`min(100, (rows / 50) * 100)`). |
+| **Cloud Run App** | **100** | Live containerized web application | 100 pts for active serving `disneyland-navigator` Cloud Run service (50 pts deploying, 75 pts degraded). |
+| **Cloud Run Pioneer Bonus** | **+50** | Deployment velocity & order | Additive bonus based on relative deployment arrival (1st: +50 pts, 2nd: +40 pts, 3rd: +30 pts, 4th: +20 pts, 5th: +15 pts, 6th+: +5-10 pts). Injects granular scoring variance. |
 | **Challenge DDL** | **100** | Telemetry ingestion table | 100 pts if `AttractionRun`, `RideExecution`, or `ParkRun` table exists with write activity. |
 | **Compute Scaling** | **100** | Spanner cluster sizing | Based on Spanner Processing Units (PUs):<br>• 100 PUs (Baseline) = 25 pts<br>• 200–400 PUs = 50 pts<br>• 500–900 PUs = 75 pts<br>• $\ge$ 1,000 PUs (1+ Node) = 100 pts |
 | **Ingestion Velocity** | **100** | Real-time write throughput | Scaled linearly up to 200 runs/sec (`min(100, (qps / 200) * 100)`). |
 | **Revenue Optimization**| **200** | Net business profit | Scaled relative to the highest park profit in the event (`(revenue / max_revenue) * 200`). |
 | **Speed Velocity Bonus**| **+100** | TrueTime pipeline commit speed | Additive bonus based on `MIN(RunTimestamp)`. 100 bonus pts for the earliest finisher, decaying by 2.5 pts/min elapsed from first finisher. Eliminates 100% ties. |
-| **TOTAL** | **1,100** | **Comprehensive Hackathon Score** | |
+| **TOTAL** | **1,250** | **Comprehensive Hackathon Score** | |
 
 ---
 
@@ -60,6 +62,8 @@ Badges highlight specific engineering decisions or operational failure modes:
 | :---: | :--- | :--- | :--- |
 | 🏰 | **Castle Architect** | 3 core tables + Property Graph deployed | Foundations complete. |
 | 🎢 | **Rollercoaster Tycoon** | Total rows in Spanner $\ge$ 50 | Comprehensive park data populated. |
+| ☁️ | **Cloud Pilot** | Disneyland Navigator deployed to Cloud Run | Web application live on serverless container infrastructure. |
+| ⚡ | **Sonic Deployer** | Cloud Run Pioneer Bonus $\ge$ 40 pts | Earliest web app deployment in the fleet. |
 | ⚡ | **Hyperscale Operator** | Spanner scaled to $\ge$ 500 PUs | Scaled cluster capacity for high concurrency. |
 | 🚀 | **Throughput Titan** | Ingestion velocity $\ge$ 100 runs/sec | Heavy concurrent write pipeline active. |
 | 🔥 | **Spanner Meltdown** | CPU utilization > 50% | Heavy query or transaction contention. |
