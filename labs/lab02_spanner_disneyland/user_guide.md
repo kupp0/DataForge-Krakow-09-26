@@ -10,6 +10,7 @@ In this codelab, you will build a zero-copy federated bridge linking **Cloud Spa
 * **🌉 Data Federation**: Bridge Spanner with BigQuery to run real-time analytical queries on live ride queues without copy-pasting data.
 * **🤖 MCP & Agent Integration**: Hook up the Google-managed Spanner MCP server to provide real-time graph data to your agents.
 * **🚀 Agentic Application Building**: Launch the **Antigravity CLI (agy)** to autonomously generate and run a FastAPI + HTML5 pathfinding web app.
+* **☁️ Cloud Run Deployment**: Instruct the agent to containerize and deploy your web application as a public Cloud Run service.
 
 ---
 
@@ -381,7 +382,7 @@ Startup & Validation (setup.sh):
 - Automated bash script that detects and activates existing 'venv' if present (otherwise creates one), ensures dependencies (fastapi, uvicorn, google-cloud-spanner, google-adk) are installed, runs app.py via uvicorn on 0.0.0.0:8000, and opens http://localhost:8000.
 
 Instructions for Agent:
-1. Research existing custom skills in `.agents/skills/` (`spanner-graph` and `vertex-config`) and verify Spanner database schema before coding.
+1. Research existing custom skills in `.agents/skills/` (`spanner-graph`, `vertex-config`, and `cloud-run-deploy`) and verify Spanner database schema before coding.
 2. Produce implementation_plan.md for approval.
 3. Write app.py, index.html, and setup.sh.
 ```
@@ -417,7 +418,36 @@ Once the agent completes the code generation:
 
 ---
 
-### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood
+### ☁️ 7. Deploying to Google Cloud Run with Antigravity
+
+Now that the Navigator works locally in your workstation, deploy it to **Google Cloud Run** to share a live, publicly accessible URL with your team.
+
+#### 1. Instruct Antigravity to Containerize & Deploy
+
+In your active `agy` CLI session, prompt the agent:
+
+```text
+Containerize the Disneyland Navigator application and deploy it to Google Cloud Run:
+1. Review the custom skill in `.agents/skills/cloud-run-deploy/SKILL.md`.
+2. Ensure `app.py` binds to host `0.0.0.0` and dynamically reads `PORT` from `os.environ.get("PORT", 8080)`.
+3. Create a production-ready `Dockerfile` (using `python:3.11-slim`) and `.dockerignore`.
+4. Run `gcloud run deploy disneyland-navigator --source . --region europe-west1 --allow-unauthenticated --set-env-vars GOOGLE_CLOUD_LOCATION=global,GOOGLE_GENAI_USE_VERTEXAI=true --quiet`.
+5. Output the live public service URL.
+```
+
+> [!NOTE]
+> Cloud Run automatically packages the source code using Cloud Build and provisions the managed container in region `europe-west1`. This step takes roughly 1.5–2 minutes.
+
+#### 2. Test Your Live Cloud Run Application
+
+Once `agy` outputs the service URL (e.g. `https://disneyland-navigator-xxxxx-ew.a.run.app`):
+1. Click the URL or open it in your browser.
+2. Select attractions in the **Interactive Route Finder** to verify graph navigation.
+3. Open the **Chat Terminal** to verify the GenAI agent connects to Vertex AI and queries Spanner.
+
+---
+
+### 🧭 8. Deep Dive: Spanner Graph Queries under the Hood
 
 The agent uses native **Spanner Graph** queries (via the `GRAPH_TABLE` function) to traverse the property graph. For example:
 
