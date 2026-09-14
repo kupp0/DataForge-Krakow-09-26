@@ -491,7 +491,7 @@ col1, col2, col3, col4, col5 = st.columns(5)
 
 total_participants = len(df)
 top_city = df.iloc[0]["city"] if not df.empty else "N/A"
-total_rows = df["total_rows"].sum() if not df.empty else 0
+total_rows = (df["total_rows"] + (df["runs"] if "runs" in df.columns else 0)).sum() if not df.empty else 0
 total_revenue = df["revenue"].sum() if not df.empty else 0.0
 peak_cpu = df["cpu_utilization_pct"].max() if not df.empty else 0.0
 
@@ -538,7 +538,7 @@ with tab_leaderboard:
             "Compute": f"{r.get('processing_units', 100)} PUs" if r.get('processing_units', 100) < 1000 else f"{r.get('processing_units', 100)//1000} Node ({r.get('processing_units', 100)} PUs)",
             "Throughput": f"{r.get('qps', 0.0):.1f} runs/s",
             "Tables": len(r["tables"]),
-            "Rows": r["total_rows"],
+            "Rows": r["total_rows"] + r.get("runs", 0),
             "Graph": "✅ Yes" if r["has_graph"] else "⏳ Pending",
             "CPU Max": f"{r['cpu_utilization_pct']:.1f}%",
             "Awards & Badges": badge_str or "—"
@@ -701,6 +701,8 @@ with tab_schema:
     
     schema_rows = []
     for r in data:
+        runs_count = r.get("runs", 0)
+        has_run_table = any(ext in " ".join(r["tables"]).lower() for ext in ["run", "execution"]) or runs_count > 0
         schema_rows.append({
             "City": r["city"],
             "Project": r["project_id"],
@@ -708,8 +710,10 @@ with tab_schema:
             "Attraction": "✅" if any(t.lower() == "attraction" for t in r["tables"]) else "❌",
             "Path": "✅" if any(t.lower() == "path" for t in r["tables"]) else "❌",
             "DisneylandGraph": "✅" if r["has_graph"] else "❌",
-            "AttractionRun (Challenge)": "✅" if any(ext in " ".join(r["tables"]).lower() for ext in ["run", "execution"]) or r["runs"] > 0 else "⏳ Pending",
-            "Total Rows": r["total_rows"]
+            "AttractionRun (Challenge)": "✅" if has_run_table else "⏳ Pending",
+            "Attraction Runs": runs_count,
+            "Base Rows": r["total_rows"],
+            "Total Rows": r["total_rows"] + runs_count
         })
     
     st.dataframe(pd.DataFrame(schema_rows), use_container_width=True, hide_index=True)
