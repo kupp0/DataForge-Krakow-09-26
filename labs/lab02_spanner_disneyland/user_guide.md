@@ -44,7 +44,7 @@ CREATE TABLE Attraction (
   Land STRING(100) NOT NULL,
   Type STRING(50) NOT NULL,
   Description STRING(MAX),
-  Embedding ARRAY<FLOAT32>(vector_length=>3072)
+  Embedding ARRAY<FLOAT32>(vector_length=>768)
 ) PRIMARY KEY (AttractionID);
 
 ALTER TABLE Attraction ADD CONSTRAINT FK_Park FOREIGN KEY (ParkID) REFERENCES DisneylandPark(ParkID);
@@ -484,21 +484,9 @@ The central event leaderboard evaluates your park revenue based on real-world **
   * Discounting too heavily leaves massive money on the table (*Bargain Basement* badge).
 * **The Challenge**: Prompt your AI agent to reason about capacity, throughput, and elasticity to find the optimal pricing equilibrium that maximizes total park revenue!
 
-### 3. The Park Architect's Dilemma: Throughput vs. CPU Meltdown
+### 3. Prompt `agy` in your Workstation VM to Build & Run a High-Throughput Load Test
 
-By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node).
-* **The Throughput Bottleneck**: A high-concurrency ingestion script will rapidly saturate 100 PUs at 100% CPU. When saturated, Spanner begins queuing requests, increasing write latencies and triggering the **🔥 Spanner Meltdown** badge.
-* **The Scaling Lever**: Watch the live event leaderboard. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more capacity. You can dynamically scale Spanner at any time via the Cloud SDK:
-  ```bash
-  # Scale to whatever capacity your park demands (e.g., 300, 500, 800, 1000 PUs)
-  gcloud spanner instances update disneyland --processing-units=<YOUR_TARGET_PUS>
-  ```
-> [!TIP]
-> **Leaderboard Strategy**: The central dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**. Scaling beyond the baseline awards bonus points and unlocks the **⚡ Hyperscale Operator** ($\ge$ 500 PUs) and **🚀 Throughput Titan** ($\ge$ 100 runs/sec) badges!
-
-### 4. Prompt `agy` in your Workstation VM to Build & Run a High-Throughput Load Test
-
-Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner load test script:
+Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner load test script against your baseline instance (configured with default 100 PUs):
 
 ```bash
 agy --dangerously-skip-permissions "Create and execute a high-throughput multi-threaded Python load test script (spanner_load_test.py) for Cloud Spanner that simulates Disneyland attraction runs. 
@@ -511,23 +499,13 @@ The script should:
 6. Benchmark sustained write throughput (runs/sec) and commit latency. Execute the script with --duration-seconds 90. If write latency climbs or CPU saturates, advise the operator on compute scaling—do NOT execute instance updates or modify processing units automatically."
 ```
 
-With `--dangerously-skip-permissions`, `agy` will generate the implementation plan, write `spanner_load_test.py`, and execute the baseline 90-second run autonomously.
+With `--dangerously-skip-permissions`, `agy` will generate the implementation plan, write `spanner_load_test.py`, and execute the baseline 90-second run autonomously with the initial 100 PUs.
 
-> [!TIP]
-> **Scaling Up Under Load**:
-> 1. Watch your Spanner CPU utilization in Cloud Monitoring or the event dashboard during the 90-second load test.
-> 2. Scale your instance compute (e.g. to 500 or 1000 PUs):
->    ```bash
->    gcloud spanner instances update disneyland --processing-units=500
->    ```
-> 3. Re-run the generated Python script directly with higher concurrency to saturate the new capacity and unlock the **🚀 Throughput Titan** badge:
->    ```bash
->    python3 spanner_load_test.py --threads 16 --duration-seconds 90
->    ```
+### 4. Monitor Spanner Health & Watch the Global Leaderboard
 
-### 5. Monitor Spanner Health & Watch the Global Leaderboard
+During and immediately following your baseline load test:
 
-1. Check your Spanner CPU and scaling in the Google Cloud Console under **Cloud Spanner > disneyland > Monitoring**.
+1. Check your Spanner CPU and latency in the Google Cloud Console under **Cloud Spanner > disneyland > Monitoring**.
 2. Look at the live event projector screen running the **Global Disneyland Leaderboard** to see:
    * Your **City Ranking** (Tokyo, London, Paris, etc.).
    * Your total park **Gross Revenue ($)** calculated live.
@@ -540,17 +518,72 @@ With `--dangerously-skip-permissions`, `agy` will generate the implementation pl
      * 🚀 **Throughput Titan** (Sustained write velocity $\ge$ 100 runs/sec)
      * 🔥 **Spanner Meltdown** (Peak load stress tester)
 
+### 5. Lesson Learned: The Park Architect's Dilemma — Vertical Scaling (Throughput vs. CPU Meltdown)
+
+Now that you have run your initial load test against the baseline instance, evaluate the observed performance:
+
+* **The Baseline Bottleneck**: By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node). Under multi-threaded concurrent ingestion, 100 PUs saturate rapidly at 100% CPU. When saturated, Spanner queues incoming requests, write latencies spike, throughput plateaus, and you likely triggered the **🔥 Spanner Meltdown** badge on the leaderboard.
+* **The Scaling Lever (Vertical Scaling)**: In Cloud Spanner, compute capacity can be scaled vertically on-the-fly with zero downtime, zero data repartitioning delays, and without dropping database connections. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more compute capacity.
+* **Step 1: Vertically Scale Spanner PUs**:
+  Run this command in your terminal to scale your instance compute capacity (e.g., to 500 or 1000 PUs):
+  ```bash
+  # Scale your instance to 500 or 1000 PUs for high-throughput ingestion
+  gcloud spanner instances update disneyland --processing-units=500
+  ```
+* **Step 2: Re-Run Load Test with Higher Concurrency**:
+  With 500+ PUs provisioned, re-run the Python load test script with increased concurrency to saturate the new capacity:
+  ```bash
+  python3 spanner_load_test.py --threads 16 --duration-seconds 90
+  ```
+
+> [!TIP]
+> **Leaderboard Strategy**: The central dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**. Scaling beyond the baseline awards bonus points and unlocks the **⚡ Hyperscale Operator** ($\ge$ 500 PUs) and **🚀 Throughput Titan** ($\ge$ 100 runs/sec) badges!
+
 ---
 
 ## 🔧 Phase 7: Pro-Tips & Advanced Extensions
 
 * **📊 Architecture Visualization (PlantUML)**: Ask `agy` to generate a PlantUML sequence diagram showing request flow from frontend to Spanner (`agy "Generate a PlantUML sequence diagram for our app"`).
-* **🔍 Semantic Vector Search**: Run vector similarity search on `Attraction.Embedding` using native cosine distance in Spanner Studio:
+* **🔍 In-Database Vector Embeddings & Semantic Search**:
+  Notice that the initial data ingestion in Phase 2 left `Attraction.Embedding` unpopulated (`NULL`). Before running vector searches, you must generate embeddings for attraction descriptions. Cloud Spanner natively supports [in-database embedding generation and backfills](https://cloud.google.com/spanner/docs/backfill-embeddings) via remote Vertex AI model integration, eliminating the need to pull raw text into client applications.
+
+  Using the multilingual embedding model [`text-multilingual-embedding-002`](https://cloud.google.com/gemini-enterprise-agent-platform/models/embeddings/get-text-embeddings) (768 dimensions), you can register a Spanner `MODEL` and execute backfills directly inside Spanner SQL.
+
+  > [!TIP]
+  > **Sample Prompt: Ask `agy` to Backfill Embeddings**:
+  > Switch to your Cloud Workstation terminal and ask `agy` to generate and run the in-database embedding backfill:
+  >
+  > ```bash
+  > agy "Generate and execute Spanner SQL to backfill vector embeddings for the Disneyland attractions in database 'agent-lab':
+  > 1. Check table 'Attraction'. If 'Embedding' has a dimension other than 768, alter it with:
+  >    ALTER TABLE Attraction ALTER COLUMN Embedding ARRAY<FLOAT32>(vector_length=>768);
+  > 2. Register the remote embedding model in Spanner:
+  >    CREATE OR REPLACE MODEL TextMultilingualEmbedding
+  >    INPUT(content STRING(MAX))
+  >    OUTPUT(embeddings STRUCT<values ARRAY<FLOAT32>>)
+  >    REMOTE OPTIONS (
+  >      endpoint = '//aiplatform.googleapis.com/projects/<YOUR_PROJECT_ID>/locations/<YOUR_REGION>/publishers/google/models/text-multilingual-embedding-002',
+  >      default_batch_size = 5
+  >    );
+  > 3. Execute an UPDATE statement using ML.PREDICT to backfill Attraction.Embedding from Attraction.Description for all rows where Embedding IS NULL.
+  > 4. Test the generated embeddings with a semantic similarity query finding the top 5 attractions matching 'spooky haunted mansion and ghosts'."
+  > ```
+
+  **Manual Spanner Studio Query (Alternative)**:
+  Once the model and embeddings are backfilled, run semantic similarity queries directly in **Spanner Studio** using native `COSINE_DISTANCE`:
   ```sql
-  -- Find attractions semantically similar to a query vector
-  SELECT AttractionID, Name, Land, Type
+  -- Find attractions semantically similar to a user query
+  SELECT AttractionID, Name, Land, Type, Description
   FROM Attraction
-  ORDER BY COSINE_DISTANCE(Embedding, @query_embedding) ASC
+  WHERE Embedding IS NOT NULL
+  ORDER BY COSINE_DISTANCE(
+    Embedding,
+    (SELECT embeddings.values 
+     FROM ML.PREDICT(
+       MODEL TextMultilingualEmbedding, 
+       (SELECT 'thrilling wild west gold mine roller coaster' AS content)
+     ))
+  ) ASC
   LIMIT 5;
   ```
 * **⚡ Lock Contention Diagnostics**: If seeing write timeouts under heavy load, check Spanner lock contention:
