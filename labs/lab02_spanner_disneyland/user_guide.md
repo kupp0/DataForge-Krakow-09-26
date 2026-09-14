@@ -12,6 +12,11 @@ In this codelab, you will build a zero-copy federated bridge linking **Cloud Spa
 * **🚀 Agentic Application Building**: Launch the **Antigravity CLI (agy)** to autonomously generate and run a FastAPI + HTML5 pathfinding web app.
 * **☁️ Cloud Run Deployment**: Instruct the agent to containerize and deploy your web application as a public Cloud Run service.
 
+> [!TIP]
+> **Reading Guide**:
+> * `[TASK]`: Action required! Run a query, execute a command, or prompt an agent.
+> * `[UNDERSTAND]`: Background theory, architectural explanations, and deep dives. No immediate command execution required.
+
 ---
 
 ## 🏗️ Phase 1: Infrastructure Provisioning (Terraform)
@@ -28,6 +33,10 @@ Populate Spanner database **`agent-lab`** with tables and data.
 2. Click on your Spanner instance **`disneyland`**, and then select database **`agent-lab`**.
 3. In the left sidebar, click **Spanner Studio**.
 4. Open a new query tab, paste the SQL script below, and click **Run**:
+
+#### 1. Define Tables & Property Graph (DDL)
+
+Copy and run the schema definition in Spanner Studio:
 
 ```sql
 -- 1. Create DisneylandPark Table
@@ -69,7 +78,16 @@ CREATE OR REPLACE PROPERTY GRAPH DisneylandGraph
       SOURCE KEY (SourceAttractionID) REFERENCES Attraction (AttractionID)
       DESTINATION KEY (TargetAttractionID) REFERENCES Attraction (AttractionID)
   );
+```
 
+#### 2. Seed Park Attractions & Walkway Topology (DML)
+
+Click the dropdown below to expand, copy the seed script, and run it in Spanner Studio:
+
+<details>
+<summary><b>▶ Click to expand Disneyland Seed Data (Parks, Attractions, Walkway Paths)</b></summary>
+
+```sql
 -- 5. Insert DisneylandPark Records
 INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (1, 'Disneyland Park (Paris)', 'Paris, France');
 INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (2, 'Walt Disney Studios Park', 'Paris, France');
@@ -78,7 +96,6 @@ INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (4, 'Disney Californi
 INSERT INTO DisneylandPark (ParkID, Name, Location) VALUES (5, 'Tokyo Disneyland', 'Tokyo, Japan');
 
 -- 6. Insert Attraction Records
-
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (1, 1, 'Disneyland Railroad Station', 'Main Street, U.S.A.', 'Transport', 'Board a vintage steam train for a scenic journey around the park.');
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (2, 1, 'Horse-Drawn Streetcars', 'Main Street, U.S.A.', 'Transport', 'Enjoy a nostalgic ride down Main Street in a turn-of-the-century streetcar.');
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (3, 1, 'Main Street Vehicles', 'Main Street, U.S.A.', 'Transport', 'Travel in style aboard a variety of vintage vehicles, like a fire engine or omnibus.');
@@ -130,7 +147,6 @@ INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VAL
 INSERT INTO Attraction (AttractionID, ParkID, Name, Land, Type, Description) VALUES (50, 1, 'Videopolis Theatre', 'Discoveryland', 'Show', 'A huge indoor venue for live shows, often with a nearby restaurant.');
 
 -- 7. Insert Path Records
-
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (1, 2, 70);
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (1, 3, 60);
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (2, 1, 70);
@@ -248,6 +264,7 @@ INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (50, 45, 40);
 INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES (50, 49, 50);
 ```
+</details>
 
 ---
 
@@ -445,7 +462,7 @@ Once `agy` outputs the service URL (e.g. `https://disneyland-navigator-xxxxx-ew.
 
 ---
 
-### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood
+### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood `[UNDERSTAND]`
 
 The agent uses native **Spanner Graph** queries (via the `GRAPH_TABLE` function) to traverse the property graph. For example:
 
@@ -471,7 +488,7 @@ Welcome to the competitive park simulation! In this phase, you will extend Disne
 
 The global hackathon admin leaderboard continuously monitors your Spanner database and awards team points for DDL completion, data throughput, and optimized park revenue.
 
-### 1. Execute Spanner Schema Extension (DDL)
+### 🎯 Step 1: Execute Spanner Schema Extension (DDL) `[TASK]`
 
 Open **Spanner Studio** in your database `agent-lab` and run the following DDL script:
 
@@ -496,30 +513,30 @@ CREATE INDEX Idx_AttractionRun_Timestamp
 ```
 
 > [!TIP]
-> **Spanner Best Practices Applied**:
+> **Spanner Architecture Best Practices Applied**:
 > * **Interleaving**: Child `AttractionRun` records are stored physically adjacent to their parent `Attraction` row on the same split, enabling zero-network-hop local joins.
 > * **Bit-Reversed Identity**: Primary key `RunID` avoids write hotspotting during high-concurrency simulation and load testing.
 > * **TrueTime Commit Timestamp**: Server-authoritative timestamps using `PENDING_COMMIT_TIMESTAMP()`.
 > * **NUMERIC & Covering Index**: Financial fields use exact numeric precision, and `STORING (TicketPrice)` enables index-only scans for price and revenue evaluation.
 
-### 2. The Disneyland Economic Intelligence: Price Elasticity & Physical Capacity
+---
+
+### 📖 Concept: Disneyland Economic Intelligence & Workload Scenarios `[UNDERSTAND]`
 
 The central event leaderboard evaluates your park revenue based on real-world **price elasticity** combined with **physical park capacity constraints**:
 
-* **Physical Park Capacity Limit**: Disneyland parks have a physical turnstile admission threshold of **85,000 daily guests**. Even if attraction rides execute hundreds of thousands of times during a stress test, physical park visitor admissions are capped at 85,000, setting a realistic revenue ceiling of **~$1.5M to $3.5M per day**.
-* **Price Elasticity Mechanics**:
-  * **Benchmark Price**: `$15.00` yields standard turnout (80 visitors per run on a 100-capacity attraction).
-  * **Sweet Spot Window**: Most successful parks operate in the **`$12.00` to `$25.00`** pricing window.
-  * **Beware the Extremes**:
-    * **Luxury Trap ($\ge \$35.00$)**: Demand collapses to 0. Empty rides generate \$0 while incurring facility overhead (*Luxury Trap* badge).
-    * **Bargain Basement ($< \$8.00$)**: Rides operate at 100% capacity, but thin profit margins barely cover operating costs (*Bargain Basement* badge).
-* **Operational Turnover Bonus**: Beyond the 85,000 admission cap, high run volumes represent high operational efficiency and crowd circulation, earning an operational micro-spend bonus ($0.025/run) without distorting park economic realism.
+| Parameter | Value / Window | Economic Impact |
+| :--- | :--- | :--- |
+| **Physical Admission Cap** | 85,000 daily guests | Sets realistic park revenue ceiling (~$1.5M to $3.5M/day). |
+| **Sweet Spot Price** | **`$12.00` – `$25.00`** | Maximizes gross revenue and attendance balance. |
+| **Luxury Trap** | **$\ge \$35.00$** | Demand collapses to 0 (*Luxury Trap* badge, $0 revenue). |
+| **Bargain Basement** | **$< \$8.00$** | 100% full rides, but razor-thin profit margins. |
+| **Operational Turnover** | High run volumes | $0.025/run crowd circulation bonus beyond admission cap. |
 
----
+<details>
+<summary><b>▶ Click to explore High-Write Workload Scenarios (IoT Sensors, MagicBand Pings, Virtual Queues)</b></summary>
 
-### 3. Advanced High-Write Stress Testing: What Workloads to Simulate?
-
-While physical visitor attendance is capped, modern Disney parks process tens of millions of high-throughput transactions every day. To test Cloud Spanner's limits (saturating CPU, maxing out QPS, and stress-testing multi-split scalability), participants can simulate these high-write workloads:
+While physical visitor attendance is capped, modern Disney parks process tens of millions of high-throughput transactions every day. To test Cloud Spanner's limits (saturating CPU, maxing out QPS, and stress-testing multi-split scalability), consider these high-write workloads:
 
 1. **🎢 High-Frequency Attraction Runs (`AttractionRun`)**:
    * Simulates continuous ride vehicle dispatches across all lands.
@@ -538,9 +555,11 @@ While physical visitor attendance is capped, modern Disney parks process tens of
    * Simulates 20,000 guests simultaneously attempting to book Space Mountain Lightning Lanes in a 5-second window.
    * **Spanner Architecture Key**: Tests **lock contention, optimistic concurrency, and transaction conflict handling** (`SPANNER_SYS.LOCK_STATS_TOP_10MINUTE`).
 
+</details>
+
 ---
 
-### 4. Prompt `agy` in your Workstation VM to Build & Run the Load Stress-Test Tool
+### 🎯 Step 2: Build & Run the Load Benchmark with `agy` `[TASK]`
 
 Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner stress-testing tool (`spanner_stress_test.py`) against your instance:
 
@@ -560,7 +579,7 @@ With `--dangerously-skip-permissions`, `agy` will generate the implementation pl
 
 ---
 
-### 5. Monitor Spanner Health & Watch the Global Leaderboard
+### 📊 Step 3: Monitor Spanner Health & Watch the Global Leaderboard `[TASK]`
 
 During and immediately following your load test:
 
@@ -579,23 +598,25 @@ During and immediately following your load test:
 
 ---
 
-### 6. Lesson Learned: The Park Architect's Dilemma — Vertical Scaling (Throughput vs. CPU Meltdown)
+### ⚡ Step 4: Vertical Scaling & Maximizing Throughput `[TASK]`
 
 Now that you have run your initial load test against the baseline instance, evaluate the observed performance:
 
 * **The Baseline Bottleneck**: By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node). Under multi-threaded concurrent ingestion, 100 PUs saturate rapidly at 100% CPU. When saturated, Spanner queues incoming requests, write latencies spike, throughput plateaus, and you likely triggered the **🔥 Spanner Meltdown** badge on the leaderboard.
 * **The Scaling Lever (Vertical Scaling)**: In Cloud Spanner, compute capacity can be scaled vertically on-the-fly with zero downtime, zero data repartitioning delays, and without dropping database connections. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more compute capacity.
-* **Step 1: Vertically Scale Spanner PUs**:
-  Run this command in your terminal to scale your instance compute capacity (e.g., to 500 or 1000 PUs):
-  ```bash
-  # Scale your instance to 500 or 1000 PUs for high-throughput ingestion
-  gcloud spanner instances update disneyland --processing-units=500
-  ```
-* **Step 2: Re-Run Load Test with Higher Concurrency**:
-  With 500+ PUs provisioned, re-run the Python load test script with increased concurrency to saturate the new capacity:
-  ```bash
-  python3 spanner_load_test.py --threads 16 --duration-seconds 90
-  ```
+
+#### 1. Vertically Scale Spanner PUs
+Run this command in your terminal to scale your instance compute capacity (e.g., to 500 or 1000 PUs):
+```bash
+# Scale your instance to 500 or 1000 PUs for high-throughput ingestion
+gcloud spanner instances update disneyland --processing-units=500
+```
+
+#### 2. Re-Run Load Test with Higher Concurrency
+With 500+ PUs provisioned, re-run the Python load test script with increased concurrency to saturate the new capacity:
+```bash
+python3 spanner_load_test.py --threads 16 --duration-seconds 90
+```
 
 > [!TIP]
 > **Leaderboard Strategy**: The central dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**. Scaling beyond the baseline awards bonus points and unlocks the **⚡ Hyperscale Operator** ($\ge$ 500 PUs) and **🚀 Throughput Titan** ($\ge$ 100 runs/sec) badges!
@@ -630,9 +651,9 @@ Now that you have run your initial load test against the baseline instance, eval
   > 4. Test the generated embeddings with a semantic similarity query finding the top 5 attractions matching 'spooky haunted mansion and ghosts'."
   > ```
 
-  **Manual Spanner Studio Steps (Alternative)**:
-  If you prefer executing the queries directly in **Spanner Studio**:
-  
+  <details>
+  <summary><b>▶ Click to view Manual Spanner Studio SQL (Alternative to agy)</b></summary>
+
   1. **Register the Remote Vertex AI Model**:
      ```sql
      CREATE OR REPLACE MODEL TextMultilingualEmbeddingGekko
@@ -673,6 +694,7 @@ Now that you have run your initial load test against the baseline instance, eval
      ) ASC
      LIMIT 5;
      ```
+  </details>
 * **⚡ Lock Contention Diagnostics**: If seeing write timeouts under heavy load, check Spanner lock contention:
   ```sql
   SELECT * FROM SPANNER_SYS.LOCK_STATS_TOP_10MINUTE;
