@@ -554,6 +554,7 @@ with tab_leaderboard:
             "Rows": r["total_rows"] + r.get("runs", 0),
             "Graph": "✅ Yes" if r["has_graph"] else "⏳ Pending",
             "CPU Max": f"{r['cpu_utilization_pct']:.1f}%",
+            "Storage": f"{r.get('storage_mb', 0.0):.2f} MB" if r.get('storage_mb', 0.0) > 0 else "—",
             "Awards & Badges": badge_str or "—"
         })
     
@@ -696,15 +697,18 @@ with tab_spanner:
         st.plotly_chart(fig_cpu, use_container_width=True)
         
     with cpu_col2:
+        max_storage = df["storage_mb"].max() if not df.empty and not pd.isna(df["storage_mb"].max()) else 1.0
         fig_storage = px.bar(
             df.sort_values("storage_mb", ascending=False),
             x="city",
             y="storage_mb",
             color="storage_mb",
             color_continuous_scale="Blues",
+            range_color=[0, max(1.0, max_storage)],
             title="Spanner Storage Consumption (MB)",
             labels={"storage_mb": "Storage (MB)", "city": "City"}
         )
+        fig_storage.update_traces(texttemplate='%{y:.2f} MB', textposition='outside')
         fig_storage.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig_storage, use_container_width=True)
 
