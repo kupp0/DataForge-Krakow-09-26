@@ -14,10 +14,11 @@ import metrics
 import business_rules
 import llm_announcer
 import ceremony_engine
-importlib.reload(metrics)
-importlib.reload(business_rules)
-importlib.reload(llm_announcer)
-importlib.reload(ceremony_engine)
+for _mod in [metrics, business_rules, llm_announcer, ceremony_engine]:
+    try:
+        importlib.reload(_mod)
+    except Exception:
+        pass
 from metrics import get_leaderboard_snapshot, get_default_admin_project, parse_projects_mapping
 from business_rules import BENCHMARK_PRICE, calculate_elasticity_demand
 from llm_announcer import generate_flash_commentary
