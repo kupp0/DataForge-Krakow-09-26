@@ -42,12 +42,13 @@ The challenge task requires participants to simulate ride operations (`Attractio
 Demand Factor = max(0.0, min(1.25, 1.0 - 0.04 * (TicketPrice - 15.0)))
 ```
 
-### Elasticity Mechanics
+### Elasticity & Capacity Mechanics
 * **Benchmark Price**: \$15.00 yields standard turnout (80 visitors per run on a 100-person capacity attraction).
 * **Discount Pricing (\$5.00)**: Turnout hits maximum attraction capacity (100 visitors/run). Low margins require high run volumes to cover operating costs.
 * **Mid-Tier Pricing (\$25.00)**: Visitor turnout drops to 48 visitors/run.
 * **Luxury Extortion ($\ge$ \$40.00)**: Demand collapses to 0. Empty rides generate \$0 revenue while continuing to accrue operational overhead.
-* **Operational Cost**: Each attraction execution incurs a flat \$50.00 operational cost (`runs * 50.00`). Profit = `Revenue - Operating Costs`.
+* **Physical Park Capacity**: Capped at **85,000 daily guests** per park, bounding admission revenue to a realistic **\$1.5M to \$3.5M** window. High run volumes beyond capacity yield an operational efficiency micro-bonus (\$0.025/run).
+* **Operational Cost**: Base facility overhead of \$120,000 + marginal variable cost of \$0.50 per ride execution (`$120,000 + runs * 0.50`). Profit = `Revenue - Operating Costs`.
 
 ---
 

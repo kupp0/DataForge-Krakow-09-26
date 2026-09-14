@@ -474,51 +474,84 @@ CREATE INDEX Idx_AttractionRun_Timestamp
 > * **TrueTime Commit Timestamp**: Server-authoritative timestamps using `PENDING_COMMIT_TIMESTAMP()`.
 > * **NUMERIC & Covering Index**: Financial fields use exact numeric precision, and `STORING (TicketPrice)` enables index-only scans for price and revenue evaluation.
 
-### 2. The Disneyland Economic Intelligence
+### 2. The Disneyland Economic Intelligence: Price Elasticity & Physical Capacity
 
-The central event leaderboard evaluates your park revenue based on real-world **price elasticity**:
-* **Theme Park Reality**: High prices yield higher profit margins per visitor, but attendance drops off steeply. Low prices pack the ride queues, but low margins fail to generate meaningful profits.
-* **Market Guidance**: Historical data shows most successful attractions operate within a realistic price window of **`$10.00` to `$30.00`**.
-* **Beware the Extremes**:
-  * Setting prices too aggressively high empties the queues (*Luxury Trap* badge).
-  * Discounting too heavily leaves massive money on the table (*Bargain Basement* badge).
-* **The Challenge**: Prompt your AI agent to reason about capacity, throughput, and elasticity to find the optimal pricing equilibrium that maximizes total park revenue!
+The central event leaderboard evaluates your park revenue based on real-world **price elasticity** combined with **physical park capacity constraints**:
 
-### 3. Prompt `agy` in your Workstation VM to Build & Run a High-Throughput Load Test
+* **Physical Park Capacity Limit**: Disneyland parks have a physical turnstile admission threshold of **85,000 daily guests**. Even if attraction rides execute hundreds of thousands of times during a stress test, physical park visitor admissions are capped at 85,000, setting a realistic revenue ceiling of **~$1.5M to $3.5M per day**.
+* **Price Elasticity Mechanics**:
+  * **Benchmark Price**: `$15.00` yields standard turnout (80 visitors per run on a 100-capacity attraction).
+  * **Sweet Spot Window**: Most successful parks operate in the **`$12.00` to `$25.00`** pricing window.
+  * **Beware the Extremes**:
+    * **Luxury Trap ($\ge \$35.00$)**: Demand collapses to 0. Empty rides generate \$0 while incurring facility overhead (*Luxury Trap* badge).
+    * **Bargain Basement ($< \$8.00$)**: Rides operate at 100% capacity, but thin profit margins barely cover operating costs (*Bargain Basement* badge).
+* **Operational Turnover Bonus**: Beyond the 85,000 admission cap, high run volumes represent high operational efficiency and crowd circulation, earning an operational micro-spend bonus ($0.025/run) without distorting park economic realism.
 
-Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner load test script against your baseline instance (configured with default 100 PUs):
+---
+
+### 3. Advanced High-Write Stress Testing: What Workloads to Simulate?
+
+While physical visitor attendance is capped, modern Disney parks process tens of millions of high-throughput transactions every day. To test Cloud Spanner's limits (saturating CPU, maxing out QPS, and stress-testing multi-split scalability), participants can simulate these high-write workloads:
+
+1. **🎢 High-Frequency Attraction Runs (`AttractionRun`)**:
+   * Simulates continuous ride vehicle dispatches across all lands.
+   * **Target**: Push $\ge$ 100–300 writes/sec using multi-threaded batch mutations.
+   * **Spanner Architecture Key**: Uses `BIT_REVERSED_POSITIVE` on `RunID` so parallel writes distribute across all splits without hot-spotting a single Paxos group.
+
+2. **📡 Rollercoaster IoT Sensor Streams (`AttractionTelemetry`)**:
+   * Simulates multi-axis accelerometers, proximity sensors, track heat, and brake pressure reporting at 10–50 Hz per ride train.
+   * **Spanner Architecture Key**: Demonstrates **interleaved time-series ingestion** (`INTERLEAVE IN PARENT Attraction`), keeping high-frequency sensor readings co-located on the same physical split as their parent attraction for fast analytical queries.
+
+3. **📍 MagicBand+ Guest Location Pings (`MagicBandPing`)**:
+   * Simulates 85,000 guests in the park tapping RFID/BLE antennas at turnstiles, food kiosks, and ride entry points.
+   * **Spanner Architecture Key**: Tests massive global non-interleaved write distribution and secondary index write overhead (`STORING` columns vs un-indexed writes).
+
+4. **⚡ The 7:00 AM Virtual Queue Surge (`VirtualQueueReservation`)**:
+   * Simulates 20,000 guests simultaneously attempting to book Space Mountain Lightning Lanes in a 5-second window.
+   * **Spanner Architecture Key**: Tests **lock contention, optimistic concurrency, and transaction conflict handling** (`SPANNER_SYS.LOCK_STATS_TOP_10MINUTE`).
+
+---
+
+### 4. Prompt `agy` in your Workstation VM to Build & Run the Load Stress-Test Tool
+
+Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner stress-testing tool (`spanner_stress_test.py`) against your instance:
 
 ```bash
-agy --dangerously-skip-permissions "Create and execute a high-throughput multi-threaded Python load test script (spanner_load_test.py) for Cloud Spanner that simulates Disneyland attraction runs. 
+agy --dangerously-skip-permissions "Create and execute a high-throughput multi-threaded Python stress-testing script (spanner_stress_test.py) for Cloud Spanner database 'agent-lab':
 The script should:
 1. Connect to Spanner instance 'disneyland' and database 'agent-lab' using google-cloud-spanner.
-2. Read the existing Attraction IDs from the 'Attraction' table.
-3. Accept command-line arguments: --threads (default 8), --batch-size (default 100, capped at 500 to respect Spanner transaction limits), and --duration-seconds (default 90).
-4. Pick optimal ticket prices within the realistic $10.00 to $30.00 market window to maximize park gross revenue under price elasticity.
-5. In parallel worker threads, commit AttractionRun records using batch mutations with PENDING_COMMIT_TIMESTAMP(), including error handling and exponential backoff for transient gRPC errors.
-6. Benchmark sustained write throughput (runs/sec) and commit latency. Execute the script with --duration-seconds 90. If write latency climbs or CPU saturates, advise the operator on compute scaling—do NOT execute instance updates or modify processing units automatically."
+2. Read the existing Attraction IDs from 'Attraction'.
+3. Accept CLI arguments: --threads (default 16), --batch-size (default 200, max 500), --duration-seconds (default 90), and --target-qps (default 250).
+4. Set realistic ticket prices ($15.00 to $22.00) so park admissions maximize profit under the 85,000-guest capacity constraint.
+5. In parallel worker threads, commit batch mutations into 'AttractionRun' with PENDING_COMMIT_TIMESTAMP(), tracking write throughput (runs/sec), P95 commit latency, and gRPC error retries.
+6. Print real-time progress every 5 seconds (Current QPS, Total Committed Rows, Average Latency ms).
+7. Execute the benchmark for 90 seconds. If Spanner CPU exceeds 80% or write latency spikes, alert the operator to vertically scale compute PUs via gcloud."
 ```
 
-With `--dangerously-skip-permissions`, `agy` will generate the implementation plan, write `spanner_load_test.py`, and execute the baseline 90-second run autonomously with the initial 100 PUs.
+With `--dangerously-skip-permissions`, `agy` will generate the implementation plan, write `spanner_stress_test.py`, and run the benchmark.
 
-### 4. Monitor Spanner Health & Watch the Global Leaderboard
+---
 
-During and immediately following your baseline load test:
+### 5. Monitor Spanner Health & Watch the Global Leaderboard
+
+During and immediately following your load test:
 
 1. Check your Spanner CPU and latency in the Google Cloud Console under **Cloud Spanner > disneyland > Monitoring**.
 2. Look at the live event projector screen running the **Global Disneyland Leaderboard** to see:
    * Your **City Ranking** (Tokyo, London, Paris, etc.).
-   * Your total park **Gross Revenue ($)** calculated live.
+   * Your total park **Gross Revenue ($)** (realistically bounded at ~$1.5M - $3.5M).
    * Your **Compute Power (PUs)** and **Write Ingestion Throughput (Runs/sec)**.
    * Your **Spanner CPU %** gauge.
    * Special badges unlocked:
      * 🏰 **Castle Architect** (Complete DDL & Graph)
-     * 💰 **Disney Tycoon** (Top revenue generator)
+     * 💰 **Disney Tycoon** (Top revenue & profit optimization)
      * ⚡ **Hyperscale Operator** (Scaled compute to $\ge$ 500 PUs)
      * 🚀 **Throughput Titan** (Sustained write velocity $\ge$ 100 runs/sec)
-     * 🔥 **Spanner Meltdown** (Peak load stress tester)
+     * 🔥 **Spanner Meltdown** (Saturated CPU under load)
 
-### 5. Lesson Learned: The Park Architect's Dilemma — Vertical Scaling (Throughput vs. CPU Meltdown)
+---
+
+### 6. Lesson Learned: The Park Architect's Dilemma — Vertical Scaling (Throughput vs. CPU Meltdown)
 
 Now that you have run your initial load test against the baseline instance, evaluate the observed performance:
 

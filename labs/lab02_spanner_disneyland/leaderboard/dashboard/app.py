@@ -8,13 +8,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import time
+import copy
 
 import importlib
 import metrics
 import business_rules
 import llm_announcer
 import ceremony_engine
-for _mod in [metrics, business_rules, llm_announcer, ceremony_engine]:
+import ceremony_audio
+for _mod in [business_rules, llm_announcer, ceremony_engine, ceremony_audio]:
     try:
         importlib.reload(_mod)
     except Exception:
@@ -75,9 +77,18 @@ st.markdown("""
         opacity: 0 !important;
     }
 
-    /* Prevent transition flashing on element containers */
-    .stElementContainer {
-        transition: none !important;
+    /* Modal Dialog Flashy Styling */
+    div[role="dialog"] {
+        max-width: 95vw !important;
+        width: 1280px !important;
+        background: linear-gradient(145deg, #131722 0%, #1a1e2e 50%, #201b33 100%) !important;
+        border: 2px solid #ff79c6 !important;
+        border-radius: 16px !important;
+        box-shadow: 0 0 50px rgba(255, 121, 198, 0.45), 0 0 100px rgba(189, 147, 249, 0.3) !important;
+    }
+    div[data-testid="stDialog"] > div:first-child {
+        background: rgba(10, 14, 26, 0.85) !important;
+        backdrop-filter: blur(14px) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -206,44 +217,11 @@ def build_storage_chart(df: pd.DataFrame):
     fig_storage.update_layout(xaxis_tickangle=-45)
     return fig_storage
 
-# Main Title & Subheader
-st.title("🏰 Lab 2: Disneyland Spanner Global Leaderboard")
-st.markdown("Real-time telemetry, scoring, revenue gamification & closing ceremony for **Lab 2 (Disneyland Spanner Hackathon)**.")
-
-# Dedicated placeholder for Roast HUD to preserve static element indices
-roast_hud_placeholder = st.empty()
-
 # Sidebar Controls
 st.sidebar.title("🏰 Lab 2 Command Center")
 
 admin_project = st.sidebar.text_input("Admin Project ID", value=get_default_admin_project(), help="GCP project hosting BigQuery connection and central administration")
 st.sidebar.markdown("**Database**: `disneyland/agent-lab`")
-
-# Initialize background poller singleton (completely non-blocking)
-telemetry_mgr = metrics.BackgroundTelemetryManager.get_instance()
-telemetry_mgr.ensure_started(admin_project, interval=15)
-
-col_ref1, col_ref2 = st.sidebar.columns([3, 2])
-with col_ref1:
-    if st.button("⚡ Sync Live Now", help="Signal background worker to poll Spanner immediately without freezing the UI"):
-        telemetry_mgr.trigger_immediate_sync()
-        st.toast("Background telemetry sync initiated!", icon="⚡")
-with col_ref2:
-    if st.button("🔄 Redraw UI"):
-        st.rerun()
-
-auto_refresh = st.sidebar.checkbox("Auto-Refresh UI (every 10s)", value=True, help="Automatically updates the screen from in-memory cache without page freezing")
-refresh_interval = 10
-
-use_mock_data = st.sidebar.checkbox("Simulation / Mock Mode", value=False, help="Use deterministic simulation for UI testing before hackathon kickoff")
-
-# Telemetry Poller status badge
-_, initial_status = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
-age = initial_status["age_seconds"]
-if initial_status["is_fetching"]:
-    st.sidebar.caption("📡 **Telemetry Poller**: 🟡 *Querying Spanner in background...*")
-else:
-    st.sidebar.caption(f"📡 **Telemetry Poller**: 🟢 *Synced ({age}s ago)*")
 
 # Dynamic Project Scope Filtering
 st.sidebar.markdown("---")
@@ -255,33 +233,105 @@ mapped_labels = {p["project_id"]: f"{p['city']} ({p['project_id'].split('-')[-1]
 
 filter_inactive = st.sidebar.checkbox(
     "Hide Inactive Projects",
-    value=True,
+    value=st.session_state.get("filter_inactive_state", True),
+    key="filter_inactive_state",
     help="Exclude projects with 0 attraction runs and 0 created tables from the leaderboard"
 )
 
 selected_project_ids = st.sidebar.multiselect(
     "Active Projects in Scope",
     options=mapped_options,
-    default=mapped_options,
+    default=st.session_state.get("selected_project_ids_state", mapped_options),
     format_func=lambda pid: mapped_labels.get(pid, pid),
+    key="selected_project_ids_state",
     help="Select which participant projects are active in this hackathon session"
 )
+
+auto_refresh = st.sidebar.checkbox("Auto-Refresh UI (every 10s)", value=True, help="Automatically updates the screen from in-memory cache without page freezing")
+refresh_interval = 10
+
+use_mock_data = st.sidebar.checkbox("Simulation / Mock Mode", value=False, help="Use deterministic simulation for UI testing before hackathon kickoff")
+
+# Initialize background poller singleton (completely non-blocking)
+telemetry_mgr = metrics.BackgroundTelemetryManager.get_instance()
+telemetry_mgr.ensure_started(admin_project, interval=15)
+
+def freeze_ceremony_baseline(admin_proj, selected_ids, filter_inact, mock_mode):
+    raw_snap, _ = telemetry_mgr.get_snapshot(admin_proj, use_mock=mock_mode)
+    snap = [d for d in raw_snap if d.get("project_id") in selected_ids]
+    if filter_inact:
+        snap = [d for d in snap if ceremony_engine.is_project_active(d)]
+    for rank_idx, item in enumerate(snap, start=1):
+        item["rank"] = rank_idx
+    return copy.deepcopy(snap)
+
+# Main Title & Subheader with Flashy Ceremony Pop-up Launcher
+col_head_title, col_head_btn = st.columns([3, 1.2])
+with col_head_title:
+    st.title("🏰 Lab 2: Disneyland Spanner Global Leaderboard")
+    st.markdown("Real-time telemetry, scoring, revenue gamification & closing ceremony for **Lab 2 (Disneyland Spanner Hackathon)**.")
+with col_head_btn:
+    st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
+    if st.button("🎪 Launch Closing Ceremony", type="primary", use_container_width=True, help="Open the flashy full-screen Closing Ceremony pop-up"):
+        st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
+        st.session_state["ceremony_modal_open"] = True
+        st.rerun()
+
+# Dedicated placeholder for Roast HUD to preserve static element indices
+roast_hud_placeholder = st.empty()
+
+col_ref1, col_ref2 = st.sidebar.columns([3, 2])
+with col_ref1:
+    if st.button("⚡ Sync Live Now", help="Signal background worker to poll Spanner immediately without freezing the UI"):
+        telemetry_mgr.trigger_immediate_sync()
+        st.toast("Background telemetry sync initiated!", icon="⚡")
+with col_ref2:
+    if st.button("🔄 Redraw UI"):
+        st.rerun()
+
+# Telemetry Poller status badge
+_, initial_status = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
+age = initial_status["age_seconds"]
+if initial_status["is_fetching"]:
+    st.sidebar.caption("📡 **Telemetry Poller**: 🟡 *Querying Spanner in background...*")
+else:
+    st.sidebar.caption(f"📡 **Telemetry Poller**: 🟢 *Synced ({age}s ago)*")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎪 Closing Ceremony")
+if st.sidebar.button("🎪 Launch Ceremony Pop-up", type="primary", use_container_width=True, key="sidebar_ceremony_launch"):
+    st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
+    st.session_state["ceremony_modal_open"] = True
+    st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎙️ AI Roaster Control")
 roaster_enabled = st.sidebar.toggle(
     "Enable AI Roaster Announcer", 
-    value=True, 
+    value=False, 
     help="Start or stop the automated Gemini 3.8 Flash roast broadcasts and floating toast HUD"
 )
 
 always_show_roast = False
 if roaster_enabled:
-    always_show_roast = st.sidebar.checkbox("Pin Roast HUD on Screen", value=True, help="Keep the funny roast HUD visible permanently so the facilitator can position and move it anywhere")
+    always_show_roast = st.sidebar.checkbox("Pin Roast HUD on Screen", value=False, help="Keep the funny roast HUD visible permanently so the facilitator can position and move it anywhere")
 
-    if st.sidebar.button("🎭 Roast A Park Now (Re-Roll)"):
-        telemetry_mgr.trigger_roast_sync()
-        st.toast("🎙️ Live Announcer is drafting a fresh roast in background!", icon="🎭")
+    col_rst1, col_rst2 = st.sidebar.columns(2)
+    with col_rst1:
+        if st.sidebar.button("🎭 Roast Now", help="Draft a fresh AI roast immediately"):
+            telemetry_mgr.trigger_roast_sync()
+            st.session_state["roast_dismissed"] = False
+            st.toast("🎙️ Live Announcer is drafting a fresh roast in background!", icon="🎭")
+            st.rerun()
+    with col_rst2:
+        if st.session_state.get("roast_dismissed", False):
+            if st.sidebar.button("👁️ Show HUD", help="Restore the floating roast card"):
+                st.session_state["roast_dismissed"] = False
+                st.rerun()
+        else:
+            if st.sidebar.button("❌ Hide HUD", help="Dismiss the floating roast card"):
+                st.session_state["roast_dismissed"] = True
+                st.rerun()
 
     # 4-Minute Cadence & 1-Minute Active Visibility Engine
     CYCLE_SECONDS = 240   # Every 4 minutes (240s)
@@ -303,8 +353,456 @@ if roaster_enabled:
 else:
     st.sidebar.markdown("🎙️ **Live Roast Status**: ⏸️ Stopped (Disabled)")
 
+def on_ceremony_dismiss():
+    st.session_state["ceremony_modal_open"] = False
+
+@st.dialog("🎪 Disneyland Park Closing Ceremony", width="large", on_dismiss=on_ceremony_dismiss)
+def show_closing_ceremony_modal(
+    admin_project: str, 
+    baseline_data: list,
+    selected_project_ids: list,
+    filter_inactive: bool
+):
+    if "ceremony_round" not in st.session_state:
+        st.session_state["ceremony_round"] = 0
+    if "show_winner_revealed" not in st.session_state:
+        st.session_state["show_winner_revealed"] = False
+
+    cur_round = st.session_state["ceremony_round"]
+    is_revealed = st.session_state.get("show_winner_revealed", False)
+
+    # 1. Strictly scope baseline data to selected project IDs
+    scoped_baseline = [p for p in baseline_data if p.get("project_id") in selected_project_ids]
+
+    # Active Project Scope Selector inside Ceremony
+    col_sc1, col_sc2 = st.columns([3, 1.2])
+    with col_sc1:
+        ceremony_only_active = st.checkbox(
+            "⚡ Only Active Projects in Ceremony",
+            value=st.session_state.get("ceremony_only_active", True),
+            key="ceremony_only_active_toggle",
+            help="Strictly include only projects with recorded runs or created tables in Spanner"
+        )
+        st.session_state["ceremony_only_active"] = ceremony_only_active
+    with col_sc2:
+        st.caption(f"🎯 Scope: **{len(scoped_baseline)}** selected parks")
+
+    if ceremony_only_active:
+        active_candidates = [p for p in scoped_baseline if ceremony_engine.is_project_active(p)]
+        if active_candidates:
+            scoped_baseline = active_candidates
+        else:
+            st.caption("ℹ️ *All sandboxes currently at baseline (0 rows). Including all selected projects.*")
+
+    for rank_idx, item in enumerate(scoped_baseline, start=1):
+        item["rank"] = rank_idx
+
+    # 2. On Round 5 Grand Finale Winner Reveal, render HTML5 Canvas Fireworks
+    if cur_round == 5 and is_revealed:
+        components.html(ceremony_audio.get_fireworks_canvas_html(), height=0)
+
+    # 3. Interactive Step Controls
+    ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([1.2, 1.2, 1.5, 1.0])
+    with ctrl_col1:
+        if st.button("⏮️ Round 0 (Reset)", use_container_width=True):
+            st.session_state["ceremony_round"] = 0
+            st.session_state["show_winner_revealed"] = False
+            raw_snap, _ = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
+            snap = [d for d in raw_snap if d.get("project_id") in selected_project_ids]
+            if filter_inactive or ceremony_only_active:
+                snap = [d for d in snap if ceremony_engine.is_project_active(d)]
+            for rank_idx, item in enumerate(snap, start=1):
+                item["rank"] = rank_idx
+            st.session_state["ceremony_frozen_snapshot"] = copy.deepcopy(snap)
+            st.rerun()
+    with ctrl_col2:
+        if st.button("◀ Previous Event", use_container_width=True, disabled=(cur_round <= 0)):
+            st.session_state["ceremony_round"] = max(0, cur_round - 1)
+            st.session_state["show_winner_revealed"] = False
+            st.rerun()
+    with ctrl_col3:
+        if cur_round < 5:
+            if st.button(f"Next Event ▶ (Round {cur_round + 1}/5)", type="primary", use_container_width=True):
+                st.session_state["ceremony_round"] = min(5, cur_round + 1)
+                st.session_state["show_winner_revealed"] = False
+                st.rerun()
+        else:
+            if not is_revealed:
+                if st.button("👑 Show Winner", type="primary", use_container_width=True):
+                    st.session_state["show_winner_revealed"] = True
+                    st.rerun()
+            else:
+                if st.button("🎉 Replay Winner Reveal", type="primary", use_container_width=True):
+                    st.session_state["show_winner_revealed"] = True
+                    st.rerun()
+    with ctrl_col4:
+        if st.button("✖ Close Stage", use_container_width=True):
+            st.session_state["ceremony_modal_open"] = False
+            st.rerun()
+
+    # Progress Tracker
+    st.progress(cur_round / 5.0, text=f"Ceremony Progress: Round {cur_round} / 5")
+
+    # Calculate simulated standings based on frozen scoped baseline snapshot
+    sim_data, round_meta = ceremony_engine.apply_event_simulation(scoped_baseline, cur_round)
+
+    # Scoped impacted parks for current round
+    impacted_parks = [p for p in sim_data if p.get("round_revenue_delta", 0.0) != 0.0 or p.get("round_score_delta", 0) != 0]
+
+    # Clean up any lingering city popup animation overlays
+    components.html(ceremony_audio.get_impacted_cities_popup_html(), height=0, width=0)
+
+    # Round Announcement Banner
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #1f2335 0%, #292e42 100%); border-left: 5px solid #ff79c6; border-radius: 8px; padding: 16px 20px; margin: 15px 0;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h3 style="margin: 0; color: #ff79c6;">{round_meta.get('icon', '🎪')} {round_meta.get('title', '')}</h3>
+        <span style="font-size: 0.85em; background: #3b4261; color: #7aa2f7; padding: 3px 10px; border-radius: 12px; font-weight: bold;">
+          ROUND {cur_round} OF 5
+        </span>
+      </div>
+      <h5 style="margin: 6px 0 10px 0; color: #7dcfff;">{round_meta.get('subtitle', '')}</h5>
+      <p style="margin: 0; font-size: 1.05em; color: #c0caf5; line-height: 1.5;">
+        {round_meta.get('storyline', '')}
+      </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if cur_round >= 1 and impacted_parks:
+        city_tags = " ".join([
+            f"<span style='background: rgba(30, 34, 52, 0.95); border: 1.5px solid #ff79c6; color: #ffffff; padding: 5px 14px; border-radius: 18px; font-size: 0.88em; font-weight: 800; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 3px 10px rgba(0,0,0,0.5);'>"
+            f"{round_meta.get('icon', '💥')} {p['city']}"
+            f"</span>"
+            for p in impacted_parks
+        ])
+        st.markdown(f"""
+        <div style="background: rgba(255, 121, 198, 0.09); border: 1.5px solid #ff79c6; border-radius: 10px; padding: 12px 18px; margin: 10px 0 18px 0;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 0.82em; font-weight: 800; color: #ff79c6; letter-spacing: 1.2px; text-transform: uppercase;">
+              🚨 CITIES IMPACTED BY THIS EVENT ({len(impacted_parks)} OF {len(sim_data)} PARKS):
+            </span>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            {city_tags}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Winner Announcement & Podium on Round 5
+    if cur_round == 5:
+        if not is_revealed:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1e2030 0%, #24283b 100%); border: 2px dashed #f6c177; border-radius: 12px; padding: 25px; text-align: center; margin: 20px 0;">
+              <h2 style="color: #f6c177; margin: 0 0 8px 0;">🏁 Round 5 Concluded • The Stage Is Set!</h2>
+              <p style="color: #c0caf5; font-size: 1.1em; margin: 0 0 15px 0;">
+                All 5 rounds of theme park events are complete. Click below to reveal the podium and celebrate the top 3 winners!
+              </p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("👑 Show Winner & Reveal Top 3 Podium", type="primary", use_container_width=True, key="dlg_show_winner_btn"):
+                st.session_state["show_winner_revealed"] = True
+                st.session_state["last_sound_fx"] = "winner_revealed"
+                st.rerun()
+        else:
+            st.balloons()
+            st.markdown("""
+            <style>
+              @keyframes confetti-fall {
+                0% { transform: translateY(-100vh) rotate(0deg); opacity: 1; }
+                100% { transform: translateY(100vh) rotate(720deg); opacity: 0.2; }
+              }
+              .confetti-particle {
+                position: fixed;
+                top: 0;
+                font-size: 24px;
+                pointer-events: none;
+                z-index: 999999;
+                animation: confetti-fall 4s linear infinite;
+              }
+            </style>
+            <div class="confetti-particle" style="left: 5%; animation-delay: 0s;">🎉</div>
+            <div class="confetti-particle" style="left: 15%; animation-delay: 0.8s;">✨</div>
+            <div class="confetti-particle" style="left: 28%; animation-delay: 0.3s;">🥇</div>
+            <div class="confetti-particle" style="left: 42%; animation-delay: 1.2s;">🌟</div>
+            <div class="confetti-particle" style="left: 58%; animation-delay: 0.5s;">👑</div>
+            <div class="confetti-particle" style="left: 72%; animation-delay: 1.5s;">🥈</div>
+            <div class="confetti-particle" style="left: 85%; animation-delay: 0.2s;">🥉</div>
+            <div class="confetti-particle" style="left: 93%; animation-delay: 1.0s;">🎊</div>
+            """, unsafe_allow_html=True)
+
+            p_first = sim_data[0] if len(sim_data) >= 1 else None
+            p_second = sim_data[1] if len(sim_data) >= 2 else None
+            p_third = sim_data[2] if len(sim_data) >= 3 else None
+
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1f2335 0%, #292e42 50%, #1a1b26 100%); border-radius: 16px; padding: 25px; text-align: center; margin: 20px 0; border: 2px solid #ffd700; box-shadow: 0 10px 40px rgba(255, 215, 0, 0.35);">
+              <span style="font-size: 2.8em;">👑 🏆 🌟</span>
+              <h1 style="color: #ffd700; margin: 8px 0 4px 0; font-size: 2.3em; letter-spacing: 1px;">
+                DISNEYLAND CLOSING CEREMONY GRAND FINALE
+              </h1>
+              <h3 style="color: #7dcfff; margin: 0; font-weight: 400;">
+                Celebrating All Top Three Cloud Spanner Theme Park Engineering Teams
+              </h3>
+            </div>
+            """, unsafe_allow_html=True)
+
+            pod_left, pod_center, pod_right = st.columns([1, 1.2, 1])
+
+            with pod_left:
+                if p_second:
+                    shift_sec = p_second.get("rank_shift", 0)
+                    shift_badge_sec = f"<span style='color: #50fa7b;'>▲ +{shift_sec}</span>" if shift_sec > 0 else (f"<span style='color: #ff5555;'>▼ {abs(shift_sec)}</span>" if shift_sec < 0 else "<span style='color: #8be9fd;'>▬ Stable</span>")
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(180deg, rgba(192,192,192,0.18) 0%, #1e222d 100%); border: 2px solid #c0c0c0; border-radius: 12px; padding: 18px; text-align: center; margin-top: 35px; box-shadow: 0 8px 24px rgba(192,192,192,0.25);">
+                      <div style="font-size: 2.5em;">🥈</div>
+                      <div style="font-size: 0.9em; font-weight: 800; color: #c0c0c0; letter-spacing: 1px;">2ND PLACE • RUNNER-UP</div>
+                      <h2 style="margin: 6px 0 2px 0; color: #f8f8f2;">{p_second['city']}</h2>
+                      <div style="font-size: 0.8em; color: #6272a4; font-family: monospace;">{p_second['project_id']}</div>
+                      <div style="margin: 12px 0 6px 0; font-size: 1.4em; font-weight: bold; color: #c0c0c0;">{p_second['score']:,} pts</div>
+                      <div style="font-size: 0.95em; color: #bd93f9; font-weight: 600;">${p_second['revenue']:,.2f}</div>
+                      <div style="margin-top: 8px; font-size: 0.85em;">Ceremony Net Shift: {shift_badge_sec}</div>
+                      <div style="margin-top: 10px; padding: 6px; background: #282a36; border-radius: 6px; font-size: 0.8em; color: #c0caf5;">
+                        🛡️ <b>Resilience Maestro:</b> Absorbed weather shocks & infrastructure anomalies with remarkable stability!
+                      </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with pod_center:
+                if p_first:
+                    shift_fir = p_first.get("rank_shift", 0)
+                    shift_badge_fir = f"<span style='color: #50fa7b;'>▲ +{shift_fir}</span>" if shift_fir > 0 else (f"<span style='color: #ff5555;'>▼ {abs(shift_fir)}</span>" if shift_fir < 0 else "<span style='color: #8be9fd;'>▬ Maintained #1</span>")
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(180deg, rgba(255,215,0,0.28) 0%, #1e222d 100%); border: 3px solid #ffd700; border-radius: 14px; padding: 22px; text-align: center; box-shadow: 0 12px 35px rgba(255,215,0,0.4);">
+                      <div style="font-size: 3.2em;">👑 🥇</div>
+                      <div style="font-size: 1.0em; font-weight: 900; color: #ffd700; letter-spacing: 1.5px;">1ST PLACE • GRAND CHAMPION</div>
+                      <h1 style="margin: 6px 0 2px 0; color: #ffffff; font-size: 2.2em;">{p_first['city']}</h1>
+                      <div style="font-size: 0.85em; color: #a9b1d6; font-family: monospace;">{p_first['project_id']}</div>
+                      <div style="margin: 14px 0 8px 0; font-size: 1.8em; font-weight: 900; color: #ffd700;">{p_first['score']:,} pts</div>
+                      <div style="font-size: 1.1em; color: #50fa7b; font-weight: 700;">${p_first['revenue']:,.2f}</div>
+                      <div style="margin-top: 8px; font-size: 0.9em;">Ceremony Net Shift: {shift_badge_fir}</div>
+                      <div style="margin-top: 12px; padding: 8px; background: rgba(255,215,0,0.15); border: 1px solid #ffd700; border-radius: 8px; font-size: 0.85em; color: #fff;">
+                        ⚡ <b>Cloud Spanner Architect Titan:</b> Dominated distributed throughput, dynamic elasticity, and TrueTime speed!
+                      </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with pod_right:
+                if p_third:
+                    shift_thi = p_third.get("rank_shift", 0)
+                    shift_badge_thi = f"<span style='color: #50fa7b;'>▲ +{shift_thi}</span>" if shift_thi > 0 else (f"<span style='color: #ff5555;'>▼ {abs(shift_thi)}</span>" if shift_thi < 0 else "<span style='color: #8be9fd;'>▬ Stable</span>")
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(180deg, rgba(205,127,50,0.18) 0%, #1e222d 100%); border: 2px solid #cd7f32; border-radius: 12px; padding: 18px; text-align: center; margin-top: 55px; box-shadow: 0 8px 24px rgba(205,127,50,0.25);">
+                      <div style="font-size: 2.5em;">🥉</div>
+                      <div style="font-size: 0.9em; font-weight: 800; color: #cd7f32; letter-spacing: 1px;">3RD PLACE • BRONZE MEDALIST</div>
+                      <h2 style="margin: 6px 0 2px 0; color: #f8f8f2;">{p_third['city']}</h2>
+                      <div style="font-size: 0.8em; color: #6272a4; font-family: monospace;">{p_third['project_id']}</div>
+                      <div style="margin: 12px 0 6px 0; font-size: 1.4em; font-weight: bold; color: #cd7f32;">{p_third['score']:,} pts</div>
+                      <div style="font-size: 0.95em; color: #bd93f9; font-weight: 600;">${p_third['revenue']:,.2f}</div>
+                      <div style="margin-top: 8px; font-size: 0.85em;">Ceremony Net Shift: {shift_badge_thi}</div>
+                      <div style="margin-top: 10px; padding: 6px; background: #282a36; border-radius: 6px; font-size: 0.8em; color: #c0caf5;">
+                        🚀 <b>Consistency Specialist:</b> Mastered ACID transactions across high concurrency ride surges!
+                      </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+    # Kahoot-Style Round Movement & Impact Highlights
+    st.markdown("---")
+    st.subheader("🔥 Round Movement & Impact Highlights")
+
+    climbers = [p for p in sim_data if p.get("rank_shift", 0) > 0]
+    climbers.sort(key=lambda x: x.get("rank_shift", 0), reverse=True)
+
+    fallers = [p for p in sim_data if p.get("rank_shift", 0) < 0]
+    fallers.sort(key=lambda x: x.get("rank_shift", 0))
+
+    impacted_parks = [p for p in sim_data if p.get("revenue_delta", 0.0) != 0.0 or p.get("score_delta", 0) != 0]
+    net_revenue_delta = sum(p.get("revenue_delta", 0.0) for p in sim_data)
+    total_rank_changes = len(climbers) + len(fallers)
+
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    with m_col1:
+        pct_hit = int((len(impacted_parks) / max(1, len(sim_data))) * 100)
+        st.metric("💥 Parks Impacted", f"{len(impacted_parks)} / {len(sim_data)}", f"{pct_hit}% of park network")
+    with m_col2:
+        if climbers:
+            top_c = climbers[0]
+            st.metric("🚀 Highest Climber", f"{top_c['city']}", f"▲ +{top_c['rank_shift']} ranks (#{top_c['orig_rank']} → #{top_c['new_rank']})")
+        else:
+            st.metric("🚀 Highest Climber", "None", "No upward movement")
+    with m_col3:
+        delta_sign = "+" if net_revenue_delta >= 0 else ""
+        st.metric("💰 Net Financial Swing", f"{delta_sign}${net_revenue_delta:,.2f}", "Total park network delta")
+    with m_col4:
+        st.metric("🔀 Leaderboard Shakeup", f"{total_rank_changes} Position Shifts", f"{len(climbers)} up, {len(fallers)} down")
+
+    if len(sim_data) >= 3:
+        st.markdown("#### 🏆 Current Podium Leaders")
+        p1, p2, p3 = st.columns(3)
+        podium_colors = [
+            ("#ffd700", "🥇 1ST PLACE", sim_data[0]),
+            ("#c0c0c0", "🥈 2ND PLACE", sim_data[1]),
+            ("#cd7f32", "🥉 3RD PLACE", sim_data[2])
+        ]
+        for col, (border_col, label, p_data) in zip([p1, p2, p3], podium_colors):
+            with col:
+                shift = p_data.get("rank_shift", 0)
+                if shift > 0:
+                    shift_badge = f"<span style='color: #50fa7b; font-weight: bold;'>▲ +{shift} ranks</span>"
+                elif shift < 0:
+                    shift_badge = f"<span style='color: #ff5555; font-weight: bold;'>▼ {abs(shift)} ranks</span>"
+                else:
+                    shift_badge = "<span style='color: #8be9fd;'>▬ Maintained</span>"
+                
+                score_str = f"{p_data['score']:,} pts ({'+' if p_data.get('score_delta',0)>=0 else ''}{p_data.get('score_delta',0)})"
+                rev_str = f"${p_data['revenue']:,.2f}"
+            
+                st.markdown(f"""
+                <div style="background: #1e222d; border-top: 4px solid {border_col}; border-radius: 8px; padding: 14px; text-align: center;">
+                  <div style="font-size: 0.85em; font-weight: bold; color: {border_col};">{label}</div>
+                  <h3 style="margin: 4px 0 2px 0; color: #f8f8f2;">{p_data['city']}</h3>
+                  <div style="font-size: 0.8em; color: #6272a4; font-family: monospace;">{p_data['project_id']}</div>
+                  <div style="margin-top: 8px; font-size: 1.1em; font-weight: bold; color: #50fa7b;">{score_str}</div>
+                  <div style="font-size: 0.88em; color: #bd93f9;">{rev_str}</div>
+                  <div style="margin-top: 6px; font-size: 0.85em;">{shift_badge}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    st.markdown("#### 📊 Movement & Impact Analytics")
+    if sim_data:
+        ch_col1, ch_col2 = st.columns(2)
+    
+        with ch_col1:
+            movement_df = pd.DataFrame([
+                {
+                    "City": p["city"],
+                    "Rank Shift": p.get("rank_shift", 0),
+                    "New Rank": p.get("new_rank", 1),
+                    "Orig Rank": p.get("orig_rank", 1),
+                    "Direction": "Climbed ▲" if p.get("rank_shift", 0) > 0 else ("Fell ▼" if p.get("rank_shift", 0) < 0 else "Unchanged ▬")
+                }
+                for p in sim_data
+            ]).sort_values(by=["Rank Shift", "New Rank"], ascending=[True, False])
+        
+            fig_shift = px.bar(
+                movement_df,
+                x="Rank Shift",
+                y="City",
+                orientation="h",
+                color="Direction",
+                color_discrete_map={
+                    "Climbed ▲": "#50fa7b",
+                    "Fell ▼": "#ff5555",
+                    "Unchanged ▬": "#6272a4"
+                },
+                title="Leaderboard Shifts (Ranks Gained / Lost)",
+                hover_data=["Orig Rank", "New Rank"]
+            )
+            fig_shift.update_layout(
+                height=450, 
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis_title="Position Delta (Ranks)",
+                yaxis_title=""
+            )
+            st.plotly_chart(fig_shift, use_container_width=True)
+        
+        with ch_col2:
+            fin_df = pd.DataFrame([
+                {
+                    "City": p["city"],
+                    "Revenue Delta ($)": p.get("revenue_delta", 0.0),
+                    "Score Delta (pts)": p.get("score_delta", 0),
+                    "Impact Type": "Gain +" if p.get("revenue_delta", 0.0) > 0 else ("Loss -" if p.get("revenue_delta", 0.0) < 0 else "Neutral 0")
+                }
+                for p in sim_data
+            ]).sort_values(by="Revenue Delta ($)", ascending=True)
+        
+            fig_fin = px.bar(
+                fin_df,
+                x="Revenue Delta ($)",
+                y="City",
+                orientation="h",
+                color="Impact Type",
+                color_discrete_map={
+                    "Gain +": "#50fa7b",
+                    "Loss -": "#ff5555",
+                    "Neutral 0": "#6272a4"
+                },
+                title="Financial Impact ($ Revenue Delta)",
+                hover_data=["Score Delta (pts)"]
+            )
+            fig_fin.update_layout(
+                height=450, 
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis_title="Revenue Change ($)",
+                yaxis_title=""
+            )
+            st.plotly_chart(fig_fin, use_container_width=True)
+
+    with st.expander("🔍 Filter Parks by Incident Status (Hit vs Safe)", expanded=False):
+        sub_col1, sub_col2 = st.columns(2)
+        with sub_col1:
+            st.markdown("##### 💥 Parks Incurring Damage or Fines")
+            damaged = [p for p in sim_data if p.get("round_revenue_delta", 0.0) < 0 or p.get("round_score_delta", 0) < 0]
+            if damaged:
+                for d in damaged:
+                    shift_icon = f"▲ +{d['rank_shift']}" if d['rank_shift'] > 0 else (f"▼ {abs(d['rank_shift'])}" if d['rank_shift'] < 0 else "▬ 0")
+                    st.markdown(f"• **{d['city']}** (`{d['project_id']}`): {d.get('round_impact_text', '')} | *Shift: {shift_icon}*")
+            else:
+                st.info("No parks incurred damage in this round.")
+        with sub_col2:
+            st.markdown("##### 🛡️ Safe or Rewarded Parks")
+            safe = [p for p in sim_data if p.get("round_revenue_delta", 0.0) >= 0 and p.get("round_score_delta", 0) >= 0]
+            if safe:
+                for s in safe:
+                    shift_icon = f"▲ +{s['rank_shift']}" if s['rank_shift'] > 0 else (f"▼ {abs(s['rank_shift'])}" if s['rank_shift'] < 0 else "▬ 0")
+                    st.markdown(f"• **{s['city']}** (`{s['project_id']}`): {s.get('round_impact_text', '')} | *Shift: {shift_icon}*")
+            else:
+                st.info("All parks were hit.")
+
+    st.markdown("### 📊 Complete Standings Shift Matrix")
+    ceremony_rows = []
+    for p in sim_data:
+        curr_rank = p.get("new_rank", p.get("rank", 1))
+        r_icon = "🥇" if curr_rank == 1 else ("🥈" if curr_rank == 2 else ("🥉" if curr_rank == 3 else f"#{curr_rank}"))
+    
+        shift_val = p.get("rank_shift", 0)
+        if shift_val > 0:
+            shift_display = f"🟢 ▲ +{shift_val}"
+        elif shift_val < 0:
+            shift_display = f"🔴 ▼ {abs(shift_val)}"
+        else:
+            shift_display = "⚪ ▬ 0"
+        
+        score_diff = p.get("score_delta", 0)
+        score_display = f"{p['score']} ({'+' if score_diff >= 0 else ''}{score_diff})"
+    
+        rev_diff = p.get("revenue_delta", 0.0)
+        rev_display = f"${p['revenue']:,.2f} ({'+' if rev_diff >= 0 else ''}${rev_diff:,.2f})"
+    
+        badge_str = " ".join([f"{b[0]} {b[1]}" for b in p.get("badges", [])])
+    
+        ceremony_rows.append({
+            "New Rank": r_icon,
+            "Shift": shift_display,
+            "City": p["city"],
+            "Project": p["project_id"],
+            "Final Score": score_display,
+            "Speed Bonus": f"+{p.get('speed_bonus', 0)} pts" if p.get('speed_bonus', 0) > 0 else "—",
+            "Disney Revenue": rev_display,
+            "Incident Report": p.get("round_impact_text", "—"),
+            "Badges": badge_str or "—"
+        })
+    
+    st.dataframe(pd.DataFrame(ceremony_rows), use_container_width=True, hide_index=True)
+
+
+is_ceremony_active = st.session_state.get("ceremony_modal_open", False)
+fragment_run_every = f"{refresh_interval}s" if (auto_refresh and not is_ceremony_active) else None
+
 # Fragment: Isolated In-Place Auto-Refresh Engine (0ms Freeze, Seamless Numbers Update)
-@st.fragment(run_every=f"{refresh_interval}s" if auto_refresh else None)
+@st.fragment(run_every=fragment_run_every)
 def render_live_telemetry_board(
     admin_project: str,
     selected_project_ids: list,
@@ -316,11 +814,15 @@ def render_live_telemetry_board(
     # Instant 0ms retrieval from in-memory cache (Zero UI freeze)
     raw_data, sync_status = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
 
-    # Filter raw data
-    data = [d for d in raw_data if d.get("project_id") in selected_project_ids]
+    # Respect persistent filter state from session_state if available
+    effective_filter_inactive = st.session_state.get("filter_inactive_state", filter_inactive)
+    effective_selected_ids = st.session_state.get("selected_project_ids_state", selected_project_ids)
 
-    if filter_inactive:
-        data = [d for d in data if (d.get("total_rows", 0) > 0 or d.get("runs", 0) > 0 or len(d.get("tables", [])) > 0)]
+    # Filter raw data strictly by scope
+    data = [d for d in raw_data if d.get("project_id") in effective_selected_ids]
+
+    if effective_filter_inactive:
+        data = [d for d in data if ceremony_engine.is_project_active(d)]
 
     # Re-rank filtered entries
     for rank_idx, item in enumerate(data, start=1):
@@ -337,7 +839,7 @@ def render_live_telemetry_board(
         ])
 
     # Roast HUD rendering
-    if roaster_enabled:
+    if roaster_enabled and not st.session_state.get("roast_dismissed", False):
         CYCLE_SECONDS = 240
         DISPLAY_SECONDS = 60
         now_ts = time.time()
@@ -426,7 +928,7 @@ def render_live_telemetry_board(
             }}
             </style>
 
-            <div class="roast-floating-card" id="roastCard">
+            <div class="roast-floating-card" id="roastCard" data-ts="{roast_ts}">
               <div class="roast-drag-handle" id="roastDragHandle" title="Drag to reposition card on screen">
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <span style="font-size: 1.1em; color: #ff79c6; cursor: grab;" title="Drag handle">⠿</span>
@@ -485,11 +987,21 @@ def render_live_telemetry_board(
                   return;
                 }
 
+                const currentTs = card.getAttribute("data-ts") || "";
+                if (currentTs && pWin.sessionStorage.getItem("roast_dismissed_ts") === currentTs) {
+                  card.remove();
+                  return;
+                }
+
                 if (closeBtn) {
                   closeBtn.onclick = function(e) {
                     e.stopPropagation();
                     e.preventDefault();
+                    if (currentTs) {
+                      pWin.sessionStorage.setItem("roast_dismissed_ts", currentTs);
+                    }
                     card.style.display = "none";
+                    card.remove();
                   };
                 }
 
@@ -669,44 +1181,47 @@ def render_live_telemetry_board(
     with tab_leaderboard:
         st.subheader("🏁 Global City Standings")
     
-        # Format table for display
-        display_rows = []
-        for r in data:
-            rank_icon = "🥇" if r["rank"] == 1 else ("🥈" if r["rank"] == 2 else ("🥉" if r["rank"] == 3 else f"#{r['rank']}"))
-            badge_str = " ".join([f"{b[0]} {b[1]}" for b in r.get("badges", [])])
+        if not data:
+            st.info("ℹ️ No active participant projects detected with tables or runs yet. Uncheck 'Hide Inactive Projects' in the sidebar to view all sandboxes.")
+        else:
+            # Format table for display
+            display_rows = []
+            for r in data:
+                rank_icon = "🥇" if r["rank"] == 1 else ("🥈" if r["rank"] == 2 else ("🥉" if r["rank"] == 3 else f"#{r['rank']}"))
+                badge_str = " ".join([f"{b[0]} {b[1]}" for b in r.get("badges", [])])
+            
+                display_rows.append({
+                    "Rank": rank_icon,
+                    "City": r["city"],
+                    "Project": r["project_id"],
+                    "Score": r["score"],
+                    "Speed Bonus": f"+{r.get('speed_bonus', 0)} pts" if r.get('speed_bonus', 0) > 0 else "—",
+                    "Revenue": f"${r['revenue']:,.2f}",
+                    "Ticket Price": f"${r['ticket_price']:.2f}" if r['ticket_price'] > 0 else "Not set",
+                    "Compute": f"{r.get('processing_units', 100)} PUs" if r.get('processing_units', 100) < 1000 else f"{r.get('processing_units', 100)//1000} Node ({r.get('processing_units', 100)} PUs)",
+                    "Throughput": f"{r.get('qps', 0.0):.1f} runs/s",
+                    "Tables": len(r["tables"]),
+                    "Rows": r["total_rows"] + r.get("runs", 0),
+                    "Graph": "✅ Yes" if r["has_graph"] else "⏳ Pending",
+                    "CPU Max": f"{r['cpu_utilization_pct']:.1f}%",
+                    "Storage": f"{r.get('storage_mb', 0.0):.2f} MB" if r.get('storage_mb', 0.0) > 0 else "—",
+                    "Awards & Badges": badge_str or "—"
+                })
         
-            display_rows.append({
-                "Rank": rank_icon,
-                "City": r["city"],
-                "Project": r["project_id"],
-                "Score": r["score"],
-                "Speed Bonus": f"+{r.get('speed_bonus', 0)} pts" if r.get('speed_bonus', 0) > 0 else "—",
-                "Revenue": f"${r['revenue']:,.2f}",
-                "Ticket Price": f"${r['ticket_price']:.2f}" if r['ticket_price'] > 0 else "Not set",
-                "Compute": f"{r.get('processing_units', 100)} PUs" if r.get('processing_units', 100) < 1000 else f"{r.get('processing_units', 100)//1000} Node ({r.get('processing_units', 100)} PUs)",
-                "Throughput": f"{r.get('qps', 0.0):.1f} runs/s",
-                "Tables": len(r["tables"]),
-                "Rows": r["total_rows"] + r.get("runs", 0),
-                "Graph": "✅ Yes" if r["has_graph"] else "⏳ Pending",
-                "CPU Max": f"{r['cpu_utilization_pct']:.1f}%",
-                "Storage": f"{r.get('storage_mb', 0.0):.2f} MB" if r.get('storage_mb', 0.0) > 0 else "—",
-                "Awards & Badges": badge_str or "—"
-            })
-    
-        leaderboard_df = pd.DataFrame(display_rows)
-        st.dataframe(
-            leaderboard_df, 
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Score": st.column_config.ProgressColumn(
-                    "Total Score (Max 1100)",
-                    min_value=0,
-                    max_value=1100,
-                    format="%d"
-                )
-            }
-        )
+            leaderboard_df = pd.DataFrame(display_rows)
+            st.dataframe(
+                leaderboard_df, 
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Score": st.column_config.ProgressColumn(
+                        "Total Score (Max 1100)",
+                        min_value=0,
+                        max_value=1100,
+                        format="%d"
+                    )
+                }
+            )
 
         # Awards Showcase
         st.markdown("### 🎖️ Hall of Fame & Badges")
@@ -783,448 +1298,93 @@ def render_live_telemetry_board(
     with tab_schema:
         st.subheader("🗂️ Table Completion Matrix")
     
-        schema_rows = []
-        for r in data:
-            runs_count = r.get("runs", 0)
-            has_run_table = any(ext in " ".join(r["tables"]).lower() for ext in ["run", "execution"]) or runs_count > 0
-            schema_rows.append({
-                "City": r["city"],
-                "Project": r["project_id"],
-                "DisneylandPark": "✅" if any(t.lower() == "disneylandpark" for t in r["tables"]) else "❌",
-                "Attraction": "✅" if any(t.lower() == "attraction" for t in r["tables"]) else "❌",
-                "Path": "✅" if any(t.lower() == "path" for t in r["tables"]) else "❌",
-                "DisneylandGraph": "✅" if r["has_graph"] else "❌",
-                "AttractionRun (Challenge)": "✅" if has_run_table else "⏳ Pending",
-                "Attraction Runs": runs_count,
-                "Base Rows": r["total_rows"],
-                "Total Rows": r["total_rows"] + runs_count
-            })
-    
-        st.dataframe(pd.DataFrame(schema_rows), use_container_width=True, hide_index=True)
+        if not data:
+            st.info("ℹ️ No active participant projects detected yet.")
+        else:
+            schema_rows = []
+            for r in data:
+                runs_count = r.get("runs", 0)
+                has_run_table = any(ext in " ".join(r["tables"]).lower() for ext in ["run", "execution"]) or runs_count > 0
+                schema_rows.append({
+                    "City": r["city"],
+                    "Project": r["project_id"],
+                    "DisneylandPark": "✅" if any(t.lower() == "disneylandpark" for t in r["tables"]) else "❌",
+                    "Attraction": "✅" if any(t.lower() == "attraction" for t in r["tables"]) else "❌",
+                    "Path": "✅" if any(t.lower() == "path" for t in r["tables"]) else "❌",
+                    "DisneylandGraph": "✅" if r["has_graph"] else "❌",
+                    "AttractionRun (Challenge)": "✅" if has_run_table else "⏳ Pending",
+                    "Attraction Runs": runs_count,
+                    "Base Rows": r["total_rows"],
+                    "Total Rows": r["total_rows"] + runs_count
+                })
+        
+            st.dataframe(pd.DataFrame(schema_rows), use_container_width=True, hide_index=True)
 
     # --- TAB 5: Disneyland Park Closing Ceremony ---
     with tab_ceremony:
-        st.subheader("🎪 Disneyland Park Closing Ceremony")
-        st.markdown("""
-        *Execute 5 consecutive dramatic disaster and fortune iterations before declaring the absolute hackathon champion!
-        Each round alters standings, simulates or applies live Cloud Spanner DML, and bridges hands-on database engineering concepts with gameplay.*
-        """)
-    
-        if "ceremony_round" not in st.session_state:
-            st.session_state["ceremony_round"] = 0
-        if "live_dml_logs" not in st.session_state:
-            st.session_state["live_dml_logs"] = []
-        if "show_winner_revealed" not in st.session_state:
-            st.session_state["show_winner_revealed"] = False
-
-        # Interactive Step Controls
-        ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([1, 1, 1, 2])
-        with ctrl_col1:
-            if st.button("⏮️ Reset Freeze (Round 0)"):
-                st.session_state["ceremony_round"] = 0
-                st.session_state["live_dml_logs"] = []
-                st.session_state["show_winner_revealed"] = False
-                st.rerun()
-        with ctrl_col2:
-            if st.button("◀ Previous Event", disabled=(st.session_state["ceremony_round"] <= 0)):
-                st.session_state["ceremony_round"] = max(0, st.session_state["ceremony_round"] - 1)
-                st.session_state["show_winner_revealed"] = False
-                st.rerun()
-        with ctrl_col3:
-            if st.session_state["ceremony_round"] < 5:
-                if st.button("Next Event ▶"):
-                    st.session_state["ceremony_round"] = min(5, st.session_state["ceremony_round"] + 1)
-                    st.session_state["show_winner_revealed"] = False
-                    st.rerun()
-            else:
-                if not st.session_state.get("show_winner_revealed", False):
-                    if st.button("👑 Show Winner", type="primary"):
-                        st.session_state["show_winner_revealed"] = True
-                        st.rerun()
-                else:
-                    if st.button("🎉 Replay Celebration", type="primary"):
-                        st.session_state["show_winner_revealed"] = True
-                        st.rerun()
-        with ctrl_col4:
-            execute_spanner_live = st.checkbox(
-                "⚡ Also execute live DML on Cloud Spanner instances", 
-                value=False,
-                help="When checked and stepping to Round 1 or 2, executes the actual Spanner DML query against participant instances in parallel."
+        st.subheader("🎪 Disneyland Park Closing Ceremony Stage")
+        
+        cur_round = st.session_state.get("ceremony_round", 0)
+        is_revealed = st.session_state.get("show_winner_revealed", False)
+        
+        status_badge = "❄️ Baseline Frozen (Round 0)" if cur_round == 0 else (
+            f"⚡ In Progress (Round {cur_round} / 5)" if cur_round < 5 else (
+                "👑 Concluded & Champion Crowned" if is_revealed else "🏁 Round 5 Completed (Awaiting Reveal)"
             )
+        )
 
-        cur_round = st.session_state["ceremony_round"]
-    
-        # Progress Tracker
-        st.progress(cur_round / 5.0, text=f"Ceremony Progress: Round {cur_round} / 5")
-    
-        # If execute_spanner_live was selected and we are on an active round
-        if execute_spanner_live and cur_round in [1, 2]:
-            if st.button(f"🚀 Dispatch Round {cur_round} DML to Spanner Now"):
-                with st.spinner(f"Executing Spanner DML across affected participant projects..."):
-                    results = ceremony_engine.execute_spanner_round_live(data, cur_round)
-                    st.session_state["live_dml_logs"] = results
-                    st.success("Spanner execution complete! Check logs below.")
-
-        # Calculate simulated standings
-        sim_data, round_meta = ceremony_engine.apply_event_simulation(data, cur_round)
-    
-        # Round Announcement Banner
         st.markdown(f"""
-        <div style="background: linear-gradient(135deg, #1f2335 0%, #292e42 100%); border-left: 5px solid #ff79c6; border-radius: 8px; padding: 16px 20px; margin: 15px 0;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin: 0; color: #ff79c6;">{round_meta.get('icon', '🎪')} {round_meta.get('title', '')}</h3>
-            <span style="font-size: 0.85em; background: #3b4261; color: #7aa2f7; padding: 3px 10px; border-radius: 12px; font-weight: bold;">
-              ROUND {cur_round} OF 5
+        <div style="background: linear-gradient(135deg, #181c2b 0%, #291e3a 100%); border: 2px solid #ff79c6; border-radius: 12px; padding: 22px; margin: 10px 0 20px 0; box-shadow: 0 8px 30px rgba(0,0,0,0.6), 0 0 20px rgba(255, 121, 198, 0.2);">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <h2 style="margin: 0; color: #ff79c6; font-size: 1.8em;">🎪 Interactive Closing Ceremony Arena</h2>
+              <div style="margin-top: 4px; color: #c0caf5; font-size: 1.05em;">
+                Dramatic 5-round disaster simulation, live Cloud Spanner DML, and Olympic podium with celebratory music.
+              </div>
+            </div>
+            <span style="background: #3b4261; color: #7dcfff; padding: 6px 16px; border-radius: 20px; font-weight: bold; font-size: 0.9em; border: 1px solid #7dcfff;">
+              {status_badge}
             </span>
           </div>
-          <h5 style="margin: 6px 0 10px 0; color: #7dcfff;">{round_meta.get('subtitle', '')}</h5>
-          <p style="margin: 0; font-size: 1.05em; color: #c0caf5; line-height: 1.5;">
-            {round_meta.get('storyline', '')}
-          </p>
+          <div style="margin-top: 14px; color: #a9b1d6; font-size: 0.9em; line-height: 1.4;">
+            🛡️ <b>Decoupled & Isolated</b>: The ceremony runs as a pop-up modal on top of the UI with an immutable telemetry snapshot, completely immune to data refresh cycles and background screen reloads.
+          </div>
         </div>
         """, unsafe_allow_html=True)
-    
-        # Educational Concept Card
-        if cur_round > 0:
-            with st.expander(f"💡 Cloud Spanner Architecture Deep Dive: {round_meta.get('concept_title', '')}", expanded=True):
-                st.markdown(round_meta.get("concept_description", ""))
-                st.code(round_meta.get("sql_statement", ""), language="sql")
-    
-        # Winner Announcement & Podium on Round 5
-        if cur_round == 5:
-            if not st.session_state.get("show_winner_revealed", False):
-                # Pre-reveal suspense teaser with prominent call-to-action button
-                st.markdown("""
-                <div style="background: linear-gradient(135deg, #1e2030 0%, #24283b 100%); border: 2px dashed #f6c177; border-radius: 12px; padding: 25px; text-align: center; margin: 20px 0;">
-                  <h2 style="color: #f6c177; margin: 0 0 8px 0;">🏁 Round 5 Concluded • The Stage Is Set!</h2>
-                  <p style="color: #c0caf5; font-size: 1.1em; margin: 0 0 15px 0;">
-                    All 5 rounds of theme park events and Spanner dynamic calculations are complete. Click below to reveal the podium and celebrate the top 3 winners!
-                  </p>
-                </div>
-                """, unsafe_allow_html=True)
-                if st.button("👑 Show Winner & Reveal Top 3 Podium", type="primary", use_container_width=True):
-                    st.session_state["show_winner_revealed"] = True
-                    st.rerun()
-            else:
-                # Multi-layer Confetti Celebration Animation
-                st.balloons()
-            
-                # 1. Full-screen HTML5 Canvas Confetti Cannon
-                components.html("""
-                <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
-                <script>
-                  var duration = 5 * 1000;
-                  var animationEnd = Date.now() + duration;
-                  var colors = ['#ffd700', '#c0c0c0', '#cd7f32', '#ff5555', '#50fa7b', '#8be9fd', '#bd93f9'];
 
-                  (function frame() {
-                    var timeLeft = animationEnd - Date.now();
-                    if (timeLeft <= 0) return;
-                
-                    confetti({
-                      particleCount: 7,
-                      angle: 60,
-                      spread: 80,
-                      origin: { x: 0, y: 0.7 },
-                      colors: colors
-                    });
-                    confetti({
-                      particleCount: 7,
-                      angle: 120,
-                      spread: 80,
-                      origin: { x: 1, y: 0.7 },
-                      colors: colors
-                    });
-                    confetti({
-                      particleCount: 4,
-                      angle: 90,
-                      spread: 120,
-                      origin: { x: 0.5, y: 0.2 },
-                      colors: colors
-                    });
+        stage_col1, stage_col2 = st.columns([1.5, 1])
+        with stage_col1:
+            if st.button("🎪 Launch Closing Ceremony Pop-up", type="primary", use_container_width=True, key="tab5_launch_btn"):
+                st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
+                st.session_state["ceremony_modal_open"] = True
+                st.rerun()
+        with stage_col2:
+            if st.button("⏮️ Reset Ceremony Freeze (Round 0)", use_container_width=True, key="tab5_reset_btn"):
+                st.session_state["ceremony_round"] = 0
+                st.session_state["show_winner_revealed"] = False
+                st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
+                st.toast("Ceremony state reset to Round 0 baseline freeze!", icon="❄️")
+                st.rerun()
 
-                    requestAnimationFrame(frame);
-                  }());
-                </script>
-                """, height=0)
-            
-                # 2. Pure CSS Falling Confetti Streamers (air-gap safe fallback)
-                st.markdown("""
-                <style>
-                  @keyframes confetti-fall {
-                    0% { transform: translateY(-100vh) rotate(0deg); opacity: 1; }
-                    100% { transform: translateY(100vh) rotate(720deg); opacity: 0.2; }
-                  }
-                  .confetti-particle {
-                    position: fixed;
-                    top: 0;
-                    font-size: 24px;
-                    pointer-events: none;
-                    z-index: 9999;
-                    animation: confetti-fall 4s linear infinite;
-                  }
-                </style>
-                <div class="confetti-particle" style="left: 5%; animation-delay: 0s;">🎉</div>
-                <div class="confetti-particle" style="left: 15%; animation-delay: 0.8s;">✨</div>
-                <div class="confetti-particle" style="left: 28%; animation-delay: 0.3s;">🥇</div>
-                <div class="confetti-particle" style="left: 42%; animation-delay: 1.2s;">🌟</div>
-                <div class="confetti-particle" style="left: 58%; animation-delay: 0.5s;">👑</div>
-                <div class="confetti-particle" style="left: 72%; animation-delay: 1.5s;">🥈</div>
-                <div class="confetti-particle" style="left: 85%; animation-delay: 0.2s;">🥉</div>
-                <div class="confetti-particle" style="left: 93%; animation-delay: 1.0s;">🎊</div>
-                """, unsafe_allow_html=True)
-            
-                # 3. Grand Olympic Podium Celebrating All Top 3 Places
-                p_first = sim_data[0] if len(sim_data) >= 1 else None
-                p_second = sim_data[1] if len(sim_data) >= 2 else None
-                p_third = sim_data[2] if len(sim_data) >= 3 else None
-            
-                st.markdown("""
-                <div style="background: linear-gradient(135deg, #1f2335 0%, #292e42 50%, #1a1b26 100%); border-radius: 16px; padding: 25px; text-align: center; margin: 20px 0; border: 2px solid #ffd700; box-shadow: 0 10px 40px rgba(255, 215, 0, 0.25);">
-                  <span style="font-size: 2.8em;">👑 🏆 🌟</span>
-                  <h1 style="color: #ffd700; margin: 8px 0 4px 0; font-size: 2.3em; letter-spacing: 1px;">
-                    DISNEYLAND CLOSING CEREMONY GRAND FINALE
-                  </h1>
-                  <h3 style="color: #7dcfff; margin: 0; font-weight: 400;">
-                    Celebrating All Top Three Cloud Spanner Theme Park Engineering Teams
-                  </h3>
-                </div>
-                """, unsafe_allow_html=True)
-            
-                pod_left, pod_center, pod_right = st.columns([1, 1.2, 1])
-            
-                # Silver: 2nd Place (Left Column)
-                with pod_left:
-                    if p_second:
-                        shift_sec = p_second.get("rank_shift", 0)
-                        shift_badge_sec = f"<span style='color: #50fa7b;'>▲ +{shift_sec}</span>" if shift_sec > 0 else (f"<span style='color: #ff5555;'>▼ {abs(shift_sec)}</span>" if shift_sec < 0 else "<span style='color: #8be9fd;'>▬ Stable</span>")
-                        st.markdown(f"""
-                        <div style="background: linear-gradient(180deg, rgba(192,192,192,0.18) 0%, #1e222d 100%); border: 2px solid #c0c0c0; border-radius: 12px; padding: 18px; text-align: center; margin-top: 35px; box-shadow: 0 8px 24px rgba(192,192,192,0.2);">
-                          <div style="font-size: 2.5em;">🥈</div>
-                          <div style="font-size: 0.9em; font-weight: 800; color: #c0c0c0; letter-spacing: 1px;">2ND PLACE • RUNNER-UP</div>
-                          <h2 style="margin: 6px 0 2px 0; color: #f8f8f2;">{p_second['city']}</h2>
-                          <div style="font-size: 0.8em; color: #6272a4; font-family: monospace;">{p_second['project_id']}</div>
-                          <div style="margin: 12px 0 6px 0; font-size: 1.4em; font-weight: bold; color: #c0c0c0;">{p_second['score']:,} pts</div>
-                          <div style="font-size: 0.95em; color: #bd93f9; font-weight: 600;">${p_second['revenue']:,.2f}</div>
-                          <div style="margin-top: 8px; font-size: 0.85em;">Ceremony Net Shift: {shift_badge_sec}</div>
-                          <div style="margin-top: 10px; padding: 6px; background: #282a36; border-radius: 6px; font-size: 0.8em; color: #c0caf5;">
-                            🛡️ <b>Resilience Maestro:</b> Absorbed weather shocks & infrastructure anomalies with remarkable stability!
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-            
-                # Gold: 1st Place (Center Column - Elevated & Crowned)
-                with pod_center:
-                    if p_first:
-                        shift_fir = p_first.get("rank_shift", 0)
-                        shift_badge_fir = f"<span style='color: #50fa7b;'>▲ +{shift_fir}</span>" if shift_fir > 0 else (f"<span style='color: #ff5555;'>▼ {abs(shift_fir)}</span>" if shift_fir < 0 else "<span style='color: #8be9fd;'>▬ Maintained #1</span>")
-                        st.markdown(f"""
-                        <div style="background: linear-gradient(180deg, rgba(255,215,0,0.25) 0%, #1e222d 100%); border: 3px solid #ffd700; border-radius: 14px; padding: 22px; text-align: center; box-shadow: 0 12px 35px rgba(255,215,0,0.35);">
-                          <div style="font-size: 3.2em;">👑 🥇</div>
-                          <div style="font-size: 1.0em; font-weight: 900; color: #ffd700; letter-spacing: 1.5px;">1ST PLACE • GRAND CHAMPION</div>
-                          <h1 style="margin: 6px 0 2px 0; color: #ffffff; font-size: 2.2em;">{p_first['city']}</h1>
-                          <div style="font-size: 0.85em; color: #a9b1d6; font-family: monospace;">{p_first['project_id']}</div>
-                          <div style="margin: 14px 0 8px 0; font-size: 1.8em; font-weight: 900; color: #ffd700;">{p_first['score']:,} pts</div>
-                          <div style="font-size: 1.1em; color: #50fa7b; font-weight: 700;">${p_first['revenue']:,.2f}</div>
-                          <div style="margin-top: 8px; font-size: 0.9em;">Ceremony Net Shift: {shift_badge_fir}</div>
-                          <div style="margin-top: 12px; padding: 8px; background: rgba(255,215,0,0.12); border: 1px solid #ffd700; border-radius: 8px; font-size: 0.85em; color: #fff;">
-                            ⚡ <b>Cloud Spanner Architect Titan:</b> Dominated distributed throughput, dynamic elasticity, and TrueTime speed!
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-            
-                # Bronze: 3rd Place (Right Column)
-                with pod_right:
-                    if p_third:
-                        shift_thi = p_third.get("rank_shift", 0)
-                        shift_badge_thi = f"<span style='color: #50fa7b;'>▲ +{shift_thi}</span>" if shift_thi > 0 else (f"<span style='color: #ff5555;'>▼ {abs(shift_thi)}</span>" if shift_thi < 0 else "<span style='color: #8be9fd;'>▬ Stable</span>")
-                        st.markdown(f"""
-                        <div style="background: linear-gradient(180deg, rgba(205,127,50,0.18) 0%, #1e222d 100%); border: 2px solid #cd7f32; border-radius: 12px; padding: 18px; text-align: center; margin-top: 55px; box-shadow: 0 8px 24px rgba(205,127,50,0.2);">
-                          <div style="font-size: 2.5em;">🥉</div>
-                          <div style="font-size: 0.9em; font-weight: 800; color: #cd7f32; letter-spacing: 1px;">3RD PLACE • BRONZE MEDALIST</div>
-                          <h2 style="margin: 6px 0 2px 0; color: #f8f8f2;">{p_third['city']}</h2>
-                          <div style="font-size: 0.8em; color: #6272a4; font-family: monospace;">{p_third['project_id']}</div>
-                          <div style="margin: 12px 0 6px 0; font-size: 1.4em; font-weight: bold; color: #cd7f32;">{p_third['score']:,} pts</div>
-                          <div style="font-size: 0.95em; color: #bd93f9; font-weight: 600;">${p_third['revenue']:,.2f}</div>
-                          <div style="margin-top: 8px; font-size: 0.85em;">Ceremony Net Shift: {shift_badge_thi}</div>
-                          <div style="margin-top: 10px; padding: 6px; background: #282a36; border-radius: 6px; font-size: 0.8em; color: #c0caf5;">
-                            🚀 <b>Consistency Specialist:</b> Mastered ACID transactions across high concurrency ride surges!
-                          </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-            
-                st.markdown("<br>", unsafe_allow_html=True)
-
-        # Kahoot-Style Round Highlights & Analytics
-        st.markdown("---")
-        st.subheader("🔥 Round Movement & Impact Highlights")
-    
-        climbers = [p for p in sim_data if p.get("rank_shift", 0) > 0]
-        climbers.sort(key=lambda x: x.get("rank_shift", 0), reverse=True)
-    
-        fallers = [p for p in sim_data if p.get("rank_shift", 0) < 0]
-        fallers.sort(key=lambda x: x.get("rank_shift", 0))
-    
-        impacted_parks = [p for p in sim_data if p.get("revenue_delta", 0.0) != 0.0 or p.get("score_delta", 0) != 0]
-        net_revenue_delta = sum(p.get("revenue_delta", 0.0) for p in sim_data)
-        total_rank_changes = len(climbers) + len(fallers)
-    
-        # 1. Kahoot KPI Scorecard
-        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-        with m_col1:
-            pct_hit = int((len(impacted_parks) / max(1, len(sim_data))) * 100)
-            st.metric("💥 Parks Impacted", f"{len(impacted_parks)} / {len(sim_data)}", f"{pct_hit}% of park network")
-        with m_col2:
-            if climbers:
-                top_c = climbers[0]
-                st.metric("🚀 Highest Climber", f"{top_c['city']}", f"▲ +{top_c['rank_shift']} ranks (#{top_c['orig_rank']} → #{top_c['new_rank']})")
-            else:
-                st.metric("🚀 Highest Climber", "None", "No upward movement")
-        with m_col3:
-            delta_sign = "+" if net_revenue_delta >= 0 else ""
-            st.metric("💰 Net Financial Swing", f"{delta_sign}${net_revenue_delta:,.2f}", "Total park network delta")
-        with m_col4:
-            st.metric("🔀 Leaderboard Shakeup", f"{total_rank_changes} Position Shifts", f"{len(climbers)} up, {len(fallers)} down")
-
-        # 2. Kahoot Top-3 Podium
-        if len(sim_data) >= 3:
-            st.markdown("#### 🏆 Current Podium Leaders")
-            p1, p2, p3 = st.columns(3)
-            podium_colors = [
-                ("#ffd700", "🥇 1ST PLACE", sim_data[0]),
-                ("#c0c0c0", "🥈 2ND PLACE", sim_data[1]),
-                ("#cd7f32", "🥉 3RD PLACE", sim_data[2])
-            ]
-            for col, (border_col, label, p_data) in zip([p1, p2, p3], podium_colors):
-                with col:
-                    shift = p_data.get("rank_shift", 0)
-                    if shift > 0:
-                        shift_badge = f"<span style='color: #50fa7b; font-weight: bold;'>▲ +{shift} ranks</span>"
-                    elif shift < 0:
-                        shift_badge = f"<span style='color: #ff5555; font-weight: bold;'>▼ {abs(shift)} ranks</span>"
-                    else:
-                        shift_badge = "<span style='color: #8be9fd;'>▬ Maintained</span>"
-                    
-                    score_str = f"{p_data['score']:,} pts ({'+' if p_data.get('score_delta',0)>=0 else ''}{p_data.get('score_delta',0)})"
-                    rev_str = f"${p_data['revenue']:,.2f}"
-                
-                    st.markdown(f"""
-                    <div style="background: #1e222d; border-top: 4px solid {border_col}; border-radius: 8px; padding: 14px; text-align: center;">
-                      <div style="font-size: 0.85em; font-weight: bold; color: {border_col};">{label}</div>
-                      <h3 style="margin: 4px 0 2px 0; color: #f8f8f2;">{p_data['city']}</h3>
-                      <div style="font-size: 0.8em; color: #6272a4; font-family: monospace;">{p_data['project_id']}</div>
-                      <div style="margin-top: 8px; font-size: 1.1em; font-weight: bold; color: #50fa7b;">{score_str}</div>
-                      <div style="font-size: 0.88em; color: #bd93f9;">{rev_str}</div>
-                      <div style="margin-top: 6px; font-size: 0.85em;">{shift_badge}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-        # 3. Interactive Plotly Impact Visualizations
-        st.markdown("#### 📊 Movement & Impact Analytics")
-        if sim_data:
-            ch_col1, ch_col2 = st.columns(2)
+        # Show current simulation matrix in Tab 5
+        base_to_show = st.session_state.get("ceremony_frozen_snapshot")
+        if not base_to_show:
+            base_to_show = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
         
-            with ch_col1:
-                # Leaderboard Movement (Rank Shifts)
-                movement_df = pd.DataFrame([
-                    {
-                        "City": p["city"],
-                        "Rank Shift": p.get("rank_shift", 0),
-                        "New Rank": p.get("new_rank", 1),
-                        "Orig Rank": p.get("orig_rank", 1),
-                        "Direction": "Climbed ▲" if p.get("rank_shift", 0) > 0 else ("Fell ▼" if p.get("rank_shift", 0) < 0 else "Unchanged ▬")
-                    }
-                    for p in sim_data
-                ]).sort_values(by=["Rank Shift", "New Rank"], ascending=[True, False])
-            
-                fig_shift = px.bar(
-                    movement_df,
-                    x="Rank Shift",
-                    y="City",
-                    orientation="h",
-                    color="Direction",
-                    color_discrete_map={
-                        "Climbed ▲": "#50fa7b",
-                        "Fell ▼": "#ff5555",
-                        "Unchanged ▬": "#6272a4"
-                    },
-                    title="Leaderboard Shifts (Ranks Gained / Lost)",
-                    hover_data=["Orig Rank", "New Rank"]
-                )
-                fig_shift.update_layout(
-                    height=450, 
-                    margin=dict(l=10, r=10, t=40, b=10),
-                    xaxis_title="Position Delta (Ranks)",
-                    yaxis_title=""
-                )
-                st.plotly_chart(fig_shift, use_container_width=True)
-            
-            with ch_col2:
-                # Financial Impact ($ Delta)
-                fin_df = pd.DataFrame([
-                    {
-                        "City": p["city"],
-                        "Revenue Delta ($)": p.get("revenue_delta", 0.0),
-                        "Score Delta (pts)": p.get("score_delta", 0),
-                        "Impact Type": "Gain +" if p.get("revenue_delta", 0.0) > 0 else ("Loss -" if p.get("revenue_delta", 0.0) < 0 else "Neutral 0")
-                    }
-                    for p in sim_data
-                ]).sort_values(by="Revenue Delta ($)", ascending=True)
-            
-                fig_fin = px.bar(
-                    fin_df,
-                    x="Revenue Delta ($)",
-                    y="City",
-                    orientation="h",
-                    color="Impact Type",
-                    color_discrete_map={
-                        "Gain +": "#50fa7b",
-                        "Loss -": "#ff5555",
-                        "Neutral 0": "#6272a4"
-                    },
-                    title="Financial Impact ($ Revenue Delta)",
-                    hover_data=["Score Delta (pts)"]
-                )
-                fig_fin.update_layout(
-                    height=450, 
-                    margin=dict(l=10, r=10, t=40, b=10),
-                    xaxis_title="Revenue Change ($)",
-                    yaxis_title=""
-                )
-                st.plotly_chart(fig_fin, use_container_width=True)
-        else:
-            st.info("ℹ️ No active participant movements in scope.")
+        # Strictly ensure scope
+        base_to_show = [p for p in base_to_show if p.get("project_id") in selected_project_ids]
+        if filter_inactive:
+            base_to_show = [p for p in base_to_show if ceremony_engine.is_project_active(p)]
+        for rank_idx, item in enumerate(base_to_show, start=1):
+            item["rank"] = rank_idx
 
-        # 4. Detailed Partition: Hit vs Safe Parks
-        with st.expander("🔍 Filter Parks by Incident Status (Hit vs Safe)", expanded=False):
-            sub_col1, sub_col2 = st.columns(2)
-            with sub_col1:
-                st.markdown("##### 💥 Parks Incurring Damage or Fines")
-                damaged = [p for p in sim_data if p.get("revenue_delta", 0.0) < 0 or p.get("score_delta", 0) < 0]
-                if damaged:
-                    for d in damaged:
-                        shift_icon = f"▲ +{d['rank_shift']}" if d['rank_shift'] > 0 else (f"▼ {abs(d['rank_shift'])}" if d['rank_shift'] < 0 else "▬ 0")
-                        st.markdown(f"• **{d['city']}** (`{d['project_id']}`): {d.get('round_impact_text', '')} | *Shift: {shift_icon}*")
-                else:
-                    st.info("No parks incurred damage in this round.")
-            with sub_col2:
-                st.markdown("##### 🛡️ Safe or Rewarded Parks")
-                safe = [p for p in sim_data if p.get("revenue_delta", 0.0) >= 0 and p.get("score_delta", 0) >= 0]
-                if safe:
-                    for s in safe:
-                        shift_icon = f"▲ +{s['rank_shift']}" if s['rank_shift'] > 0 else (f"▼ {abs(s['rank_shift'])}" if s['rank_shift'] < 0 else "▬ 0")
-                        st.markdown(f"• **{s['city']}** (`{s['project_id']}`): {s.get('round_impact_text', '')} | *Shift: {shift_icon}*")
-                else:
-                    st.info("All parks were hit.")
+        sim_data, round_meta = ceremony_engine.apply_event_simulation(base_to_show, cur_round)
 
-        # Shift Leaderboard Table
-        st.markdown("### 📊 Complete Standings Shift Matrix")
-    
+        st.markdown(f"#### 📊 Ceremony Standings Shift Matrix ({round_meta.get('title', 'Baseline Freeze')})")
         ceremony_rows = []
         for p in sim_data:
             curr_rank = p.get("new_rank", p.get("rank", 1))
             r_icon = "🥇" if curr_rank == 1 else ("🥈" if curr_rank == 2 else ("🥉" if curr_rank == 3 else f"#{curr_rank}"))
-        
             shift_val = p.get("rank_shift", 0)
             if shift_val > 0:
                 shift_display = f"🟢 ▲ +{shift_val}"
@@ -1232,37 +1392,25 @@ def render_live_telemetry_board(
                 shift_display = f"🔴 ▼ {abs(shift_val)}"
             else:
                 shift_display = "⚪ ▬ 0"
-            
+
             score_diff = p.get("score_delta", 0)
             score_display = f"{p['score']} ({'+' if score_diff >= 0 else ''}{score_diff})"
-        
             rev_diff = p.get("revenue_delta", 0.0)
             rev_display = f"${p['revenue']:,.2f} ({'+' if rev_diff >= 0 else ''}${rev_diff:,.2f})"
-        
             badge_str = " ".join([f"{b[0]} {b[1]}" for b in p.get("badges", [])])
-        
+
             ceremony_rows.append({
-                "New Rank": r_icon,
+                "Rank": r_icon,
                 "Shift": shift_display,
                 "City": p["city"],
                 "Project": p["project_id"],
                 "Final Score": score_display,
-                "Speed Bonus": f"+{p.get('speed_bonus', 0)} pts" if p.get('speed_bonus', 0) > 0 else "—",
                 "Disney Revenue": rev_display,
                 "Incident Report": p.get("round_impact_text", "—"),
                 "Badges": badge_str or "—"
             })
-        
-        st.dataframe(
-            pd.DataFrame(ceremony_rows),
-            use_container_width=True,
-            hide_index=True
-        )
-    
-        # Show live Spanner DML execution receipt if available
-        if st.session_state.get("live_dml_logs"):
-            with st.expander("📝 Cloud Spanner Live DML Execution Receipt", expanded=True):
-                st.dataframe(pd.DataFrame(st.session_state["live_dml_logs"]), use_container_width=True, hide_index=True)
+
+        st.dataframe(pd.DataFrame(ceremony_rows), use_container_width=True, hide_index=True)
 
 # Mount live telemetry board
 render_live_telemetry_board(
@@ -1273,6 +1421,20 @@ render_live_telemetry_board(
     roaster_enabled=roaster_enabled,
     always_show_roast=always_show_roast
 )
+
+# Open Closing Ceremony Modal if Active
+if st.session_state.get("ceremony_modal_open", False):
+    baseline_snap = st.session_state.get("ceremony_frozen_snapshot")
+    if not baseline_snap:
+        baseline_snap = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
+        st.session_state["ceremony_frozen_snapshot"] = copy.deepcopy(baseline_snap)
+
+    show_closing_ceremony_modal(
+        admin_project=admin_project,
+        baseline_data=st.session_state["ceremony_frozen_snapshot"],
+        selected_project_ids=selected_project_ids,
+        filter_inactive=filter_inactive
+    )
 
 # Clean up any legacy client-side auto-refresh timers
 components.html(

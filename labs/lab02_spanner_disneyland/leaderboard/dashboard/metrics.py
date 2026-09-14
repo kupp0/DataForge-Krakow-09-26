@@ -3,6 +3,7 @@ High-Performance Telemetry collection module for Disneyland Spanner Hackathon Ad
 Direct authoritative Cloud Spanner schema & row counts + Cloud Monitoring API integration.
 Parallelized with ThreadPoolExecutor across all 25 projects.
 """
+import re
 import os
 import datetime
 import time
@@ -25,6 +26,34 @@ except ImportError:
 from business_rules import calculate_attraction_run_metrics, compute_participant_score
 
 import subprocess
+import json
+
+CACHE_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".telemetry_cache.json")
+
+def _save_snapshot_to_cache(snapshot: List[Dict[str, Any]]) -> None:
+    try:
+        def serialize_item(obj):
+            if hasattr(obj, "isoformat"):
+                return obj.isoformat()
+            if hasattr(obj, "timestamp"):
+                return obj.timestamp()
+            return str(obj)
+
+        with open(CACHE_FILE_PATH, "w") as f:
+            json.dump(snapshot, f, default=serialize_item, indent=2)
+    except Exception as e:
+        logging.warning(f"Could not save telemetry cache to disk: {e}")
+
+def _load_snapshot_from_cache() -> Optional[List[Dict[str, Any]]]:
+    try:
+        if os.path.exists(CACHE_FILE_PATH):
+            with open(CACHE_FILE_PATH, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    return data
+    except Exception as e:
+        logging.warning(f"Could not load telemetry cache from disk: {e}")
+    return None
 
 def find_projects_txt() -> str:
     """Finds projects.txt path dynamically by checking env or walking up parent directories."""
@@ -175,7 +204,7 @@ def fetch_participant_monitoring_metrics(
         "storage_mb": storage_mb
     }
 
-def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
+def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Authoritative, direct Cloud Spanner schema, row count, compute scale, and throughput inspection.
     """
@@ -190,6 +219,17 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
 
     client = get_spanner_client(project_id)
     if not client:
+        if fallback_prev and (len(fallback_prev.get("tables", [])) > 0 or fallback_prev.get("runs", 0) > 0):
+            return {
+                "tables": fallback_prev.get("tables", []),
+                "total_rows": fallback_prev.get("total_rows", 0),
+                "has_graph": fallback_prev.get("has_graph", False),
+                "runs": fallback_prev.get("runs", 0),
+                "ticket_price": fallback_prev.get("ticket_price", 0.0),
+                "processing_units": fallback_prev.get("processing_units", 100),
+                "qps": fallback_prev.get("qps", 0.0),
+                "first_run_timestamp": fallback_prev.get("first_run_timestamp")
+            }
         return {
             "tables": tables,
             "total_rows": total_rows,
@@ -250,7 +290,17 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
                         qps = round(max(burst_qps, live_qps), 1)
     except Exception:
         # Database might not exist yet or instance not provisioned
-        pass
+        if fallback_prev and (len(fallback_prev.get("tables", [])) > 0 or fallback_prev.get("runs", 0) > 0):
+            return {
+                "tables": fallback_prev.get("tables", []),
+                "total_rows": fallback_prev.get("total_rows", 0),
+                "has_graph": fallback_prev.get("has_graph", False),
+                "runs": fallback_prev.get("runs", 0),
+                "ticket_price": fallback_prev.get("ticket_price", 0.0),
+                "processing_units": fallback_prev.get("processing_units", 100),
+                "qps": fallback_prev.get("qps", 0.0),
+                "first_run_timestamp": fallback_prev.get("first_run_timestamp")
+            }
 
     return {
         "tables": tables,
@@ -265,7 +315,8 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
 
 def run_spanner_dml(project_id: str, query: str, params: Optional[dict] = None) -> tuple[bool, str, int]:
     """
-    Executes a DML statement on Spanner in a read-write transaction with error handling.
+    Executes a DML statement on Spanner in a read-write transaction,
+    falling back to Partitioned DML for bulk updates exceeding mutation limits.
     """
     client = get_spanner_client(project_id)
     if not client:
@@ -273,17 +324,50 @@ def run_spanner_dml(project_id: str, query: str, params: Optional[dict] = None) 
     try:
         inst = client.instance("disneyland")
         db = inst.database("agent-lab")
-        def tx_dml(tx):
-            return tx.execute_update(query, params=params or {})
-        modified_count = db.run_in_transaction(tx_dml)
-        return True, f"Success: {modified_count} rows modified", modified_count
+        try:
+            def tx_dml(tx):
+                return tx.execute_update(query, params=params or {})
+            modified_count = db.run_in_transaction(tx_dml)
+            return True, f"Success: {modified_count} rows modified", modified_count
+        except Exception as tx_err:
+            # Fallback to Partitioned DML for bulk table operations exceeding mutation limits
+            if not params:
+                try:
+                    pdml_query = query
+                    # Partitioned DML does not support subqueries in Spanner. Pre-resolve AttractionID subqueries:
+                    match = re.search(r"\(\s*SELECT\s+AttractionID\s+FROM\s+Attraction", query, re.IGNORECASE)
+                    if match:
+                        sub_start = match.start()
+                        depth = 0
+                        sub_end = -1
+                        for idx in range(sub_start, len(query)):
+                            if query[idx] == "(":
+                                depth += 1
+                            elif query[idx] == ")":
+                                depth -= 1
+                                if depth == 0:
+                                    sub_end = idx
+                                    break
+                        if sub_end != -1:
+                            subquery = query[sub_start + 1:sub_end].strip()
+                            with db.snapshot() as snap:
+                                id_rows = list(snap.execute_sql(subquery))
+                                id_strs = [str(r[0]) for r in id_rows]
+                            if id_strs:
+                                pdml_query = query[:sub_start] + "(" + ",".join(id_strs) + ")" + query[sub_end + 1:]
+                    row_ct = db.execute_partitioned_dml(pdml_query)
+                    return True, f"Success (Partitioned DML): {row_ct} rows modified", row_ct
+                except Exception as pdml_err:
+                    logging.warning(f"Partitioned DML error on {project_id}: {pdml_err}")
+            return False, str(tx_err), 0
     except Exception as e:
         return False, str(e), 0
 
 def get_leaderboard_snapshot(
     admin_project_id: Optional[str] = None,
     use_mock: bool = False,
-    selected_project_ids: Optional[List[str]] = None
+    selected_project_ids: Optional[List[str]] = None,
+    prev_snapshot: Optional[List[Dict[str, Any]]] = None
 ) -> List[Dict[str, Any]]:
     """
     Compiles snapshot across participants in parallel from projects.txt.
@@ -293,6 +377,8 @@ def get_leaderboard_snapshot(
     participants = parse_projects_mapping(admin_project_id)
     if selected_project_ids:
         participants = [p for p in participants if p["project_id"] in selected_project_ids]
+
+    prev_by_pid = {p["project_id"]: p for p in (prev_snapshot or [])}
     
     if use_mock:
         temp_records = []
@@ -346,9 +432,10 @@ def get_leaderboard_snapshot(
         # Parallel worker per project
         def process_participant(p):
             proj_id = p["project_id"]
+            prev_data = prev_by_pid.get(proj_id)
             
             # 1. Spanner inspection
-            spanner_data = fetch_participant_spanner_details(proj_id)
+            spanner_data = fetch_participant_spanner_details(proj_id, fallback_prev=prev_data)
             
             # 2. Monitoring metrics
             mon_metrics = fetch_participant_monitoring_metrics(proj_id, interval, mon_client)
@@ -465,9 +552,10 @@ class BackgroundTelemetryManager:
     _lock = threading.Lock()
 
     def __init__(self):
-        self.cached_snapshot: List[Dict[str, Any]] = []
+        disk_snap = _load_snapshot_from_cache()
+        self.cached_snapshot: List[Dict[str, Any]] = disk_snap if disk_snap else []
         self.cached_mock_snapshot: List[Dict[str, Any]] = []
-        self.last_fetch_time: float = 0.0
+        self.last_fetch_time: float = time.time() if disk_snap else 0.0
         self.is_fetching: bool = False
         self.last_error: Optional[str] = None
         self.admin_project_id: Optional[str] = None
@@ -499,13 +587,14 @@ class BackgroundTelemetryManager:
         if admin_project_id:
             self.admin_project_id = admin_project_id
         if not self.cached_snapshot:
-            self.cached_snapshot = create_initial_baseline_snapshot(self.admin_project_id)
+            disk_snap = _load_snapshot_from_cache()
+            self.cached_snapshot = disk_snap if disk_snap else create_initial_baseline_snapshot(self.admin_project_id)
         if self._thread is None or not self._thread.is_alive():
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._polling_loop, 
                 args=(interval,), 
-                daemon=True,
+                daemon=True, 
                 name="SpannerTelemetryPoller"
             )
             self._thread.start()
@@ -547,11 +636,12 @@ class BackgroundTelemetryManager:
         while not self._stop_event.is_set():
             try:
                 self.is_fetching = True
-                snap = get_leaderboard_snapshot(self.admin_project_id, use_mock=False)
+                snap = get_leaderboard_snapshot(self.admin_project_id, use_mock=False, prev_snapshot=self.cached_snapshot)
                 if snap:
                     self.cached_snapshot = snap
                     self.last_fetch_time = time.time()
                     self.last_error = None
+                    _save_snapshot_to_cache(snap)
             except Exception as e:
                 self.last_error = str(e)
                 logging.error(f"Background telemetry sync error: {e}")
@@ -592,7 +682,8 @@ class BackgroundTelemetryManager:
         self.ensure_started(admin_project_id)
 
         if not self.cached_snapshot:
-            self.cached_snapshot = create_initial_baseline_snapshot(self.admin_project_id)
+            disk_snap = _load_snapshot_from_cache()
+            self.cached_snapshot = disk_snap if disk_snap else create_initial_baseline_snapshot(self.admin_project_id)
 
         now = time.time()
         age = int(now - self.last_fetch_time) if self.last_fetch_time > 0 else 0

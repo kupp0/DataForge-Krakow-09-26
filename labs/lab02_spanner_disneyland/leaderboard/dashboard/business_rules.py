@@ -4,10 +4,15 @@ Computes price elasticity, attraction revenue, composite scores, and humorous aw
 """
 from typing import Dict, List, Any
 
-# Heuristics parameters for participants
+# Realistic Theme Park Operational & Capacity Constraints
 BENCHMARK_PRICE = 15.0
+MIN_REALISTIC_PRICE = 5.0
+MAX_REALISTIC_PRICE = 40.0
 MAX_CAPACITY_PER_RUN = 100
-RUN_OPERATING_COST = 50.0  # Cost per attraction run
+MAX_PARK_DAILY_CAPACITY = 85_000    # Peak physical guest admission capacity per park (Disneyland benchmark)
+BASE_FACILITY_OVERHEAD = 120_000.0  # Daily baseline park operational overhead (cast members, utilities)
+MARGINAL_RUN_COST = 0.50           # Variable maintenance & power cost per ride execution ($0.50/run)
+MAX_REVENUE_CEILING = 3_500_000.0   # Hard physical economic ceiling for single-park daily revenue ($3.5M)
 
 def calculate_elasticity_demand(ticket_price: float) -> float:
     """
@@ -18,20 +23,24 @@ def calculate_elasticity_demand(ticket_price: float) -> float:
     """
     if ticket_price <= 0:
         return 0.0
-    # Linear elasticity model centered at $15 benchmark
+    # Clamped elasticity model centered at $15 benchmark
     # Price $15 -> demand 1.0 (80 visitors out of 100 capacity)
     # Price $5  -> demand 1.25 (100 visitors)
     # Price $25 -> demand 0.60 (48 visitors)
-    # Price $40 -> demand 0.00 (0 visitors)
-    demand_factor = max(0.0, min(1.25, 1.0 - 0.04 * (ticket_price - BENCHMARK_PRICE)))
+    # Price >= $40 -> demand 0.00 (0 visitors)
+    clamped_price = max(MIN_REALISTIC_PRICE, min(MAX_REALISTIC_PRICE, ticket_price))
+    demand_factor = max(0.0, min(1.25, 1.0 - 0.04 * (clamped_price - BENCHMARK_PRICE)))
+    if ticket_price > MAX_REALISTIC_PRICE:
+        demand_factor = 0.0
     return demand_factor
 
 def calculate_attraction_run_metrics(ticket_price: float, runs: int, raw_visitors: int = 0) -> Dict[str, float]:
     """
-    Calculates effective visitors, gross revenue, operating costs, and net profit.
+    Calculates effective visitors, gross revenue, operating costs, and net profit
+    subject to physical park capacity constraints and realistic marginal costs.
     """
     if runs <= 0:
-        return {"effective_visitors": 0, "revenue": 0.0, "cost": 0.0, "profit": 0.0}
+        return {"effective_visitors": 0, "revenue": 0.0, "cost": 0.0, "profit": 0.0, "avg_price": 0.0, "runs": 0}
     
     demand = calculate_elasticity_demand(ticket_price)
     base_turnout = 80.0
@@ -43,9 +52,23 @@ def calculate_attraction_run_metrics(ticket_price: float, runs: int, raw_visitor
     else:
         actual_per_run = effective_visitors_per_run
         
-    total_visitors = int(actual_per_run * runs)
-    revenue = round(total_visitors * ticket_price, 2)
-    cost = round(runs * RUN_OPERATING_COST, 2)
+    # Physical Park Daily Capacity Constraint (capped at 85,000 guests)
+    unconstrained_visitors = int(actual_per_run * runs)
+    total_visitors = min(MAX_PARK_DAILY_CAPACITY, unconstrained_visitors)
+    
+    # Base admission revenue from physical guests
+    clamped_price = max(0.0, min(50.0, ticket_price))
+    admission_revenue = total_visitors * clamped_price
+
+    # High-Throughput Operations Bonus: Beyond base capacity, high run volume represents
+    # ride turnover efficiency and ancillary concession/merchandise micro-spend ($0.025 per run)
+    extra_run_bonus = max(0.0, (runs - 1_000) * 0.025)
+    
+    # Bounded total park revenue (realistic maximum of $3.5M per park)
+    revenue = round(min(MAX_REVENUE_CEILING, admission_revenue + extra_run_bonus), 2)
+    
+    # Realistic operational cost: Base park facility overhead + marginal cost per ride run
+    cost = round(BASE_FACILITY_OVERHEAD + (runs * MARGINAL_RUN_COST), 2)
     profit = round(revenue - cost, 2)
     
     return {
