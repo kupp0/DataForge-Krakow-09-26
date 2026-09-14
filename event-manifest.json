@@ -48,10 +48,12 @@
     },
     {
       "id": "google-developer-knowledge",
-      "type": "server",
+      "type": "plugin",
       "config": {
-        "command": "/google/bin/releases/devsite-mcp/server_main.par",
-        "args": []
+        "url": "https://developerknowledge.googleapis.com/mcp",
+        "serverUrl": "https://developerknowledge.googleapis.com/mcp",
+        "serverURL": "https://developerknowledge.googleapis.com/mcp",
+        "authProviderType": "google_credentials"
       }
     }
   ]

@@ -135,12 +135,16 @@ print(f"  -> Resolved active GCP Project ID: {project_id}")
 # Target paths
 gemini_config_dir = os.path.join(target_home, ".gemini", "config")
 agy_config_dir = os.path.join(target_home, ".gemini", "antigravity-cli")
-plugins_dir = os.path.join(target_home, ".gemini", "antigravity-cli", "plugins")
- 
+plugins_dirs = [
+    os.path.join(target_home, ".gemini", "antigravity-cli", "plugins"),
+    os.path.join(target_home, ".gemini", "config", "plugins")
+]
+
 os.makedirs(gemini_config_dir, exist_ok=True)
 os.makedirs(agy_config_dir, exist_ok=True)
-os.makedirs(plugins_dir, exist_ok=True)
- 
+for pdir in plugins_dirs:
+    os.makedirs(pdir, exist_ok=True)
+
 # Build dynamic mcpServers dict
 mcp_servers_dict = {}
 for server in mcp_servers:
@@ -152,9 +156,10 @@ for server in mcp_servers:
     mcp_servers_dict[server_id] = server_config
     
     if server_type == "plugin":
-        plugin_path = os.path.join(plugins_dir, f"{server_id}.json")
-        with open(plugin_path, "w") as f:
-            json.dump(server_config, f, indent=2)
+        for pdir in plugins_dirs:
+            plugin_path = os.path.join(pdir, f"{server_id}.json")
+            with open(plugin_path, "w") as f:
+                json.dump(server_config, f, indent=2)
  
 mcp_config = {"mcpServers": mcp_servers_dict}
  
@@ -164,18 +169,82 @@ with open(os.path.join(gemini_config_dir, "mcp_config.json"), "w") as f:
 with open(os.path.join(agy_config_dir, "mcp_config.json"), "w") as f:
     json.dump(mcp_config, f, indent=2)
  
+# Resolve default model with Medium thinking level
+default_model = "Gemini 3.8 Flash (Medium)"
+try:
+    import subprocess
+    res = subprocess.run(["agy", "models"], capture_output=True, text=True, timeout=5)
+    for line in res.stdout.splitlines():
+        line_clean = line.strip()
+        if "Flash" in line_clean and "(Medium)" in line_clean:
+            default_model = line_clean
+            break
+except Exception:
+    pass
+
+print(f"  -> Setting default model thinking level: {default_model}")
+
 # Write general config.json
 cli_config = {
     "project": project_id,
     "project_id": project_id,
     "location": "global",
     "theme": "dark",
-    "terms_accepted": True
+    "terms_accepted": True,
+    "model": default_model,
+    "thinking": {
+        "thinking_level": "MEDIUM"
+    },
+    "thinkingLevel": "medium"
 }
 with open(os.path.join(gemini_config_dir, "config.json"), "w") as f:
     json.dump(cli_config, f, indent=2)
 with open(os.path.join(agy_config_dir, "config.json"), "w") as f:
     json.dump(cli_config, f, indent=2)
+
+# Write agy settings.json (enforces Medium thinking level by default)
+agy_settings = {
+    "model": default_model,
+    "colorScheme": "dark",
+    "enableTelemetry": False,
+    "thinking": {
+        "thinking_level": "MEDIUM"
+    },
+    "thinkingLevel": "medium",
+    "gcp": {
+        "project": project_id,
+        "location": "global"
+    }
+}
+with open(os.path.join(agy_config_dir, "settings.json"), "w") as f:
+    json.dump(agy_settings, f, indent=2)
+with open(os.path.join(target_home, ".gemini", "settings.json"), "w") as f:
+    json.dump(agy_settings, f, indent=2)
+
+# Configure Code-OSS / Cloud Workstations IDE settings
+code_settings_dirs = [
+    os.path.join(target_home, ".code-oss", "User"),
+    os.path.join(target_home, ".local", "share", "code-server", "User"),
+    os.path.join(target_home, ".config", "Code - OSS", "User"),
+    os.path.join(target_home, ".config", "Code", "User")
+]
+for cdir in code_settings_dirs:
+    try:
+        os.makedirs(cdir, exist_ok=True)
+        cpath = os.path.join(cdir, "settings.json")
+        csettings = {}
+        if os.path.exists(cpath):
+            try:
+                with open(cpath, "r") as cf:
+                    csettings = json.load(cf)
+            except Exception:
+                pass
+        csettings["antigravity.model"] = default_model
+        csettings["antigravity.thinkingLevel"] = "medium"
+        with open(cpath, "w") as cf:
+            json.dump(csettings, cf, indent=2)
+    except Exception:
+        pass
  
 # Pre-configure gcloud configuration file
 gcloud_config_dir = os.path.join(target_home, ".config", "gcloud", "configurations")
