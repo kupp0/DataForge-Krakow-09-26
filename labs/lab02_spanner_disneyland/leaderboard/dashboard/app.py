@@ -67,19 +67,33 @@ st.sidebar.title("🏰 Lab 2 Command Center")
 admin_project = st.sidebar.text_input("Admin Project ID", value=get_default_admin_project(), help="GCP project hosting BigQuery connection and central administration")
 st.sidebar.markdown("**Database**: `disneyland/agent-lab`")
 
-auto_refresh = st.sidebar.checkbox("Auto-Refresh (every 20s)", value=False)
-refresh_interval = 20
+# Initialize background poller singleton (completely non-blocking)
+telemetry_mgr = metrics.BackgroundTelemetryManager.get_instance()
+telemetry_mgr.ensure_started(admin_project, interval=15)
+
+col_ref1, col_ref2 = st.sidebar.columns([3, 2])
+with col_ref1:
+    if st.button("⚡ Sync Live Now", help="Signal background worker to poll Spanner immediately without freezing the UI"):
+        telemetry_mgr.trigger_immediate_sync()
+        st.toast("Background telemetry sync initiated!", icon="⚡")
+with col_ref2:
+    if st.button("🔄 Redraw UI"):
+        st.rerun()
+
+auto_refresh = st.sidebar.checkbox("Auto-Refresh UI (every 10s)", value=True, help="Automatically updates the screen from in-memory cache without page freezing")
+refresh_interval = 10
 
 use_mock_data = st.sidebar.checkbox("Simulation / Mock Mode", value=False, help="Use deterministic simulation for UI testing before hackathon kickoff")
 
-if st.sidebar.button("🔄 Refresh Data Now"):
-    st.cache_data.clear()
+# Instant 0ms retrieval from in-memory cache (Zero UI freeze)
+raw_data, sync_status = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
 
-@st.cache_data(ttl=15)
-def load_snapshot(mock_mode: bool, admin_proj: str):
-    return get_leaderboard_snapshot(admin_project_id=admin_proj, use_mock=mock_mode)
-
-raw_data = load_snapshot(use_mock_data, admin_project)
+# Background Poller Status Badge
+age = sync_status["age_seconds"]
+if sync_status["is_fetching"]:
+    st.sidebar.caption("📡 **Telemetry Poller**: 🟡 *Querying Spanner in background...*")
+else:
+    st.sidebar.caption(f"📡 **Telemetry Poller**: 🟢 *Synced ({age}s ago)*")
 
 # Dynamic Project Scope Filtering
 st.sidebar.markdown("---")

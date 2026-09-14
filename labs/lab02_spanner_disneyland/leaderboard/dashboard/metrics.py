@@ -5,8 +5,9 @@ Parallelized with ThreadPoolExecutor across all 25 projects.
 """
 import os
 import datetime
+import time
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
 # Suppress client-side telemetry export noise
@@ -409,3 +410,108 @@ def get_leaderboard_snapshot(
         r["rank"] = rank
         
     return results
+
+import threading
+
+class BackgroundTelemetryManager:
+    """
+    Singleton manager that decouples expensive Cloud Spanner and Cloud Monitoring
+    multi-project network queries from the Streamlit UI rendering thread.
+    Executes polling in a background daemon thread and updates an atomic in-memory cache.
+    """
+    _instance = None
+    _lock = threading.Lock()
+
+    def __init__(self):
+        self.cached_snapshot: List[Dict[str, Any]] = []
+        self.cached_mock_snapshot: List[Dict[str, Any]] = []
+        self.last_fetch_time: float = 0.0
+        self.is_fetching: bool = False
+        self.last_error: Optional[str] = None
+        self.admin_project_id: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._trigger_event = threading.Event()
+
+    @classmethod
+    def get_instance(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = BackgroundTelemetryManager()
+        return cls._instance
+
+    def ensure_started(self, admin_project_id: Optional[str] = None, interval: int = 15):
+        if admin_project_id:
+            self.admin_project_id = admin_project_id
+        if self._thread is None or not self._thread.is_alive():
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._polling_loop, 
+                args=(interval,), 
+                daemon=True,
+                name="SpannerTelemetryPoller"
+            )
+            self._thread.start()
+
+    def trigger_immediate_sync(self):
+        """Signals background worker to initiate a sync cycle immediately."""
+        self._trigger_event.set()
+
+    def _polling_loop(self, interval: int):
+        while not self._stop_event.is_set():
+            try:
+                self.is_fetching = True
+                snap = get_leaderboard_snapshot(self.admin_project_id, use_mock=False)
+                if snap:
+                    self.cached_snapshot = snap
+                    self.last_fetch_time = time.time()
+                    self.last_error = None
+            except Exception as e:
+                self.last_error = str(e)
+                logging.error(f"Background telemetry sync error: {e}")
+            finally:
+                self.is_fetching = False
+
+            # Responsive sleep listening for trigger or stop events
+            for _ in range(max(1, interval * 2)):
+                if self._stop_event.is_set():
+                    return
+                if self._trigger_event.is_set():
+                    self._trigger_event.clear()
+                    break
+                time.sleep(0.5)
+
+    def get_snapshot(self, admin_project_id: Optional[str] = None, use_mock: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Instant 0ms non-blocking retrieval of latest snapshot from memory.
+        """
+        if admin_project_id and admin_project_id != self.admin_project_id:
+            self.admin_project_id = admin_project_id
+
+        if use_mock:
+            if not self.cached_mock_snapshot:
+                self.cached_mock_snapshot = get_leaderboard_snapshot(self.admin_project_id, use_mock=True)
+            return self.cached_mock_snapshot, {
+                "last_fetch_time": time.time(),
+                "age_seconds": 0,
+                "is_fetching": False,
+                "mode": "MOCK"
+            }
+
+        self.ensure_started(admin_project_id)
+
+        # Cold start fallback if accessed before background thread completes first cycle
+        if not self.cached_snapshot:
+            self.cached_snapshot = get_leaderboard_snapshot(self.admin_project_id, use_mock=False)
+            self.last_fetch_time = time.time()
+
+        now = time.time()
+        age = int(now - self.last_fetch_time) if self.last_fetch_time > 0 else 0
+        meta = {
+            "last_fetch_time": self.last_fetch_time,
+            "age_seconds": age,
+            "is_fetching": self.is_fetching,
+            "last_error": self.last_error,
+            "mode": "LIVE_BACKGROUND"
+        }
+        return self.cached_snapshot, meta
