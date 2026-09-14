@@ -387,14 +387,12 @@ Instructions for Agent:
 3. Write app.py, index.html, and setup.sh.
 ```
 
----
-
-### 🧩 5. Understanding the `agy` CLI Development Workflow
-
-The agent operates in three distinct phases:
-1. **Planning (Implementation Plan)**: The agent creates an architecture plan (`implementation_plan.md`) for your review. If auto-approve is off, type `yes` to proceed.
-2. **Execution**: The agent writes the backend FastAPI app (`app.py`), the frontend client (`index.html`), and a startup script (`setup.sh`).
-3. **Walkthrough**: The agent outputs a final `walkthrough.md` report explaining the generated components.
+> [!TIP]
+> **Understanding the `agy` CLI Development Workflow**:
+> The agent operates in three distinct phases:
+> 1. **Planning (Implementation Plan)**: The agent creates an architecture plan (`implementation_plan.md`) for your review. If auto-approve is off, type `yes` to proceed.
+> 2. **Execution**: The agent writes the backend FastAPI app (`app.py`), the frontend client (`index.html`), and a startup script (`setup.sh`).
+> 3. **Walkthrough**: The agent outputs a final `walkthrough.md` report explaining the generated components.
 
 > [!IMPORTANT]
 > **Known Limitation: File Links in Terminals**:
@@ -402,7 +400,7 @@ The agent operates in three distinct phases:
 
 ---
 
-### 💻 6. Run and Explore the Application
+### 💻 5. Run and Explore the Application
 
 Once the agent completes the code generation:
 
@@ -418,7 +416,7 @@ Once the agent completes the code generation:
 
 ---
 
-### ☁️ 7. Deploying to Google Cloud Run with Antigravity
+### ☁️ 6. Deploying to Google Cloud Run with Antigravity
 
 Now that the Navigator works locally in your workstation, deploy it to **Google Cloud Run** to share a live, publicly accessible URL with your team.
 
@@ -447,7 +445,7 @@ Once `agy` outputs the service URL (e.g. `https://disneyland-navigator-xxxxx-ew.
 
 ---
 
-### 🧭 8. Deep Dive: Spanner Graph Queries under the Hood
+### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood
 
 The agent uses native **Spanner Graph** queries (via the `GRAPH_TABLE` function) to traverse the property graph. For example:
 
