@@ -298,9 +298,10 @@ if roaster_enabled:
                 🎪 LIVE ROAST BULLETIN • {model_name}
               </span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
               <span style="font-size: 0.75em; color: #8be9fd; font-family: monospace;">⏱️ {roast_ts}</span>
               <button id="roastResetBtn" title="Reset card to center position" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 121, 198, 0.4); color: #f8f8f2; border-radius: 4px; font-size: 0.7em; padding: 2px 6px; cursor: pointer;">🎯 Center</button>
+              <button id="roastCloseBtn" title="Close roast popup" style="background: rgba(255, 121, 198, 0.2); border: 1px solid rgba(255, 121, 198, 0.6); color: #ff79c6; border-radius: 4px; font-size: 0.75em; padding: 2px 7px; cursor: pointer; font-weight: bold; line-height: 1;">✕</button>
             </div>
           </div>
           <div style="display: inline-block; background: #44475a; color: #50fa7b; font-size: 0.82em; font-weight: bold; padding: 2px 10px; border-radius: 12px; margin-bottom: 8px;">
@@ -341,10 +342,20 @@ if roaster_enabled:
             const card = pDoc.getElementById("roastCard");
             const handle = pDoc.getElementById("roastDragHandle");
             const resetBtn = pDoc.getElementById("roastResetBtn");
+            const closeBtn = pDoc.getElementById("roastCloseBtn");
 
             if (!card || !handle) {
               setTimeout(setupDraggable, 50);
               return;
+            }
+
+            if (closeBtn) {
+              closeBtn.onclick = function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+                card.style.display = "none";
+                card.remove();
+              };
             }
 
             // Restore position if previously saved
@@ -483,8 +494,52 @@ if roaster_enabled:
         </script>
         """, height=0, width=0)
 
+    else:
+        st.markdown("""
+        <style>
+        #roastCard, .roast-floating-card {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        components.html("""
+        <script>
+        (function() {
+          const pDoc = window.parent.document;
+          const cards = pDoc.querySelectorAll("#roastCard, .roast-floating-card");
+          cards.forEach(c => {
+            c.style.display = 'none';
+            c.remove();
+          });
+        })();
+        </script>
+        """, height=0, width=0)
+
 else:
     st.sidebar.markdown("🎙️ **Live Roast Status**: ⏸️ Stopped (Disabled)")
+    st.markdown("""
+    <style>
+    #roastCard, .roast-floating-card {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    components.html("""
+    <script>
+    (function() {
+      const pDoc = window.parent.document;
+      const cards = pDoc.querySelectorAll("#roastCard, .roast-floating-card");
+      cards.forEach(c => {
+        c.style.display = 'none';
+        c.remove();
+      });
+    })();
+    </script>
+    """, height=0, width=0)
 
 # Summary Metrics Row
 col1, col2, col3, col4, col5 = st.columns(5)
