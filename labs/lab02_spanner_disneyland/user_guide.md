@@ -7,10 +7,11 @@ In this codelab, you will build a zero-copy federated bridge linking **Cloud Spa
 ## 🎯 Lab Objectives
 * **🏗️ Infrastructure Review**: Peer behind the curtain at the pre-provisioned VPC network, Cloud Workstations, and Cloud Spanner architecture.
 * **🎡 Schema & Graph Setup**: Populate Disneyland attractions, connect path routes, and define a native Spanner Property Graph.
-* **🌉 Data Federation**: Bridge Spanner with BigQuery to run real-time analytical queries on live ride queues without copy-pasting data.
 * **🤖 MCP & Agent Integration**: Hook up the Google-managed Spanner MCP server to provide real-time graph data to your agents.
 * **🚀 Agentic Application Building**: Launch the **Antigravity CLI (agy)** to autonomously generate and run a FastAPI + HTML5 pathfinding web app.
 * **☁️ Cloud Run Deployment**: Instruct the agent to containerize and deploy your web application as a public Cloud Run service.
+* **🎢 Stress Testing & Dynamic Pricing**: Scale Cloud Spanner capacity and benchmark write throughput under simulated park load.
+* **🌉 Advanced Extensions**: Explore in-database vector embeddings and real-time BigQuery data federation.
 
 > [!TIP]
 > **Reading Guide**:
@@ -268,23 +269,7 @@ INSERT INTO Path (SourceAttractionID, TargetAttractionID, DistanceMeters) VALUES
 
 ---
 
-## 🌉 Phase 3: Real-Time Bridge Verification Query
-
-Verify the zero-copy federated bridge by querying Spanner tables directly from BigQuery Studio:
-
-1. Open **BigQuery Studio** in the Google Cloud Console.
-2. In the left **Explorer** panel, expand your project to locate the mapped **`disneyland_spanner_external`** dataset.
-3. Open a new SQL tab, paste the following query (replace `YOUR_PROJECT_ID`), and click **Run**:
-
-```sql
-SELECT * 
-FROM `YOUR_PROJECT_ID.disneyland_spanner_external.Attraction` 
-LIMIT 5;
-```
-
----
-
-## 🎛️ Phase 4: Model Context Protocol (MCP) Agent Registry Verification
+## 🎛️ Phase 3: Model Context Protocol (MCP) Agent Registry Verification
 
 Spanner is automatically registered as a Google-managed MCP Server in the Gemini Agent Platform (formerly VertexAI) **Agent Registry** once active.
 
@@ -303,9 +288,11 @@ To verify the registry connection:
 
 ---
 
-## 🚀 Phase 5: Building the Agentic Application
+## 🚀 Phase 4: Building the Agentic Application
 
-Use the **Antigravity CLI (agy)** in your Cloud Workstation to generate a complete web app (FastAPI backend and HTML5 frontend) that leverages **Spanner Graph** pathfinding.
+Time to roll up your sleeves and get your hands dirty—**this is where the real fun begins!** 🛠️✨
+
+With your database seeded and the MCP server connected, you'll put the **Antigravity CLI (`agy`)** into the driver's seat to autonomously architect, implement, and run a complete AI-driven Disneyland pathfinding web application (FastAPI backend + interactive HTML5 frontend) powered by **Spanner Property Graph** queries.
 
 ### 📂 1. Open the Project Folder & Terminal in Cloud Workstations
 
@@ -482,7 +469,7 @@ This zero-copy graph traversal avoids the overhead of syncing data to a separate
 
 ---
 
-## 🎢 Phase 6: Challenge Task — Dynamic Pricing, Attraction Executions & Live Leaderboard
+## 🎢 Phase 5: Challenge Task — Dynamic Pricing, Attraction Executions & Live Leaderboard
 
 Welcome to the competitive park simulation! In this phase, you will extend Disneyland's data model to simulate live attraction execution runs, track ticket revenue, and optimize pricing under economic demand constraints.
 
@@ -494,7 +481,7 @@ Open **Spanner Studio** in your database `agent-lab` and run the following DDL s
 
 ```sql
 -- =============================================================================
--- Phase 6 Challenge: Attraction Executions & Dynamic Pricing Engine
+-- Phase 5 Challenge: Attraction Executions & Dynamic Pricing Engine
 -- =============================================================================
 
 CREATE TABLE AttractionRun (
@@ -623,8 +610,18 @@ python3 spanner_load_test.py --threads 16 --duration-seconds 90
 
 ---
 
-## 🔧 Phase 7: Pro-Tips & Advanced Extensions
+## 🔧 Phase 6: Pro-Tips & Advanced Extensions
 
+* **🌉 Real-Time BigQuery Data Federation (Optional)**:
+  Cloud Spanner can be queried directly from BigQuery via zero-copy external datasets without exporting or syncing data:
+  1. Open **BigQuery Studio** in the Google Cloud Console.
+  2. In the left **Explorer** panel, expand your project to locate the mapped **`disneyland_spanner_external`** dataset.
+  3. Open a new SQL tab, paste the query below (replace `<YOUR_PROJECT_ID>`), and click **Run**:
+     ```sql
+     SELECT AttractionID, Name, Land, Type
+     FROM `<YOUR_PROJECT_ID>.disneyland_spanner_external.Attraction`
+     LIMIT 10;
+     ```
 * **📊 Architecture Visualization (PlantUML)**: Ask `agy` to generate a PlantUML sequence diagram showing request flow from frontend to Spanner (`agy "Generate a PlantUML sequence diagram for our app"`).
 * **🔍 In-Database Vector Embeddings & Semantic Search**:
   Notice that the initial data ingestion in Phase 2 left `Attraction.Embedding` unpopulated (`NULL`). Before running vector searches, you must generate embeddings for attraction descriptions. Cloud Spanner natively supports [in-database embedding generation and backfills](https://cloud.google.com/spanner/docs/backfill-embeddings) via remote Vertex AI model integration, eliminating the need to pull raw text into client applications.
