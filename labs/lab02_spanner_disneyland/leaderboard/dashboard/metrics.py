@@ -418,12 +418,48 @@ def get_leaderboard_snapshot(
     return results
 
 import threading
+import random
+
+def create_initial_baseline_snapshot(admin_project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Creates an instant zero-latency baseline snapshot from projects.txt
+    so the UI can render on frame 0 without waiting for Spanner or Cloud Monitoring.
+    """
+    participants = parse_projects_mapping(admin_project_id)
+    records = []
+    for rank, p in enumerate(participants, start=1):
+        records.append({
+            "project_id": p["project_id"],
+            "city": p["city"],
+            "member": p["member"],
+            "short_id": p["short_id"],
+            "tables": [],
+            "total_rows": 0,
+            "has_graph": False,
+            "cpu_utilization_pct": 0.0,
+            "storage_mb": 0.0,
+            "ticket_price": 0.0,
+            "runs": 0,
+            "processing_units": 100,
+            "qps": 0.0,
+            "visitors": 0,
+            "revenue": 0.0,
+            "profit": 0.0,
+            "first_run_timestamp": None,
+            "is_facilitator": p.get("is_facilitator", False),
+            "rank": rank,
+            "score": 0,
+            "badges": [],
+            "speed_bonus": 0,
+            "round_impact_text": "Awaiting live telemetry handshake"
+        })
+    return records
 
 class BackgroundTelemetryManager:
     """
-    Singleton manager that decouples expensive Cloud Spanner and Cloud Monitoring
-    multi-project network queries from the Streamlit UI rendering thread.
-    Executes polling in a background daemon thread and updates an atomic in-memory cache.
+    Singleton manager that completely decouples expensive Cloud Spanner, Cloud Monitoring,
+    and Gemini AI roast generation from the Streamlit UI rendering thread.
+    Executes polling and roast updates in background daemon threads and serves atomic in-memory cache.
     """
     _instance = None
     _lock = threading.Lock()
@@ -439,6 +475,19 @@ class BackgroundTelemetryManager:
         self._stop_event = threading.Event()
         self._trigger_event = threading.Event()
 
+        # Background Roast Announcer State (0ms UI retrieval)
+        self.cached_roast: Dict[str, Any] = {
+            "target_city": "Kraków",
+            "emoji": "🏰",
+            "roast": "All parks are calibrating Spanner nodes and spinning up TrueTime engines!",
+            "rhyme": "Welcome to the Disneyland Spanner Grand Prix,\nLet's see whose database will set the magic free!",
+            "timestamp": time.strftime("%H:%M:%S"),
+            "model": "Gemini 3.8 Flash"
+        }
+        self.last_roast_time: float = 0.0
+        self._roast_thread: Optional[threading.Thread] = None
+        self._roast_lock = threading.Lock()
+
     @classmethod
     def get_instance(cls):
         with cls._lock:
@@ -449,6 +498,8 @@ class BackgroundTelemetryManager:
     def ensure_started(self, admin_project_id: Optional[str] = None, interval: int = 15):
         if admin_project_id:
             self.admin_project_id = admin_project_id
+        if not self.cached_snapshot:
+            self.cached_snapshot = create_initial_baseline_snapshot(self.admin_project_id)
         if self._thread is None or not self._thread.is_alive():
             self._stop_event.clear()
             self._thread = threading.Thread(
@@ -462,6 +513,35 @@ class BackgroundTelemetryManager:
     def trigger_immediate_sync(self):
         """Signals background worker to initiate a sync cycle immediately."""
         self._trigger_event.set()
+
+    def trigger_roast_sync(self):
+        """Asynchronously triggers a fresh roast generation via Gemini in the background without blocking."""
+        with self._roast_lock:
+            if self._roast_thread is None or not self._roast_thread.is_alive():
+                self._roast_thread = threading.Thread(
+                    target=self._roast_worker,
+                    daemon=True,
+                    name="RoastBackgroundWorker"
+                )
+                self._roast_thread.start()
+
+    def _roast_worker(self):
+        try:
+            import llm_announcer
+            target_proj = self.admin_project_id or get_default_admin_project()
+            snap = self.cached_snapshot if self.cached_snapshot else create_initial_baseline_snapshot(target_proj)
+            new_roast = llm_announcer.generate_roast_broadcast(snap, target_proj)
+            if new_roast and isinstance(new_roast, dict) and "roast" in new_roast:
+                self.cached_roast = new_roast
+                self.last_roast_time = time.time()
+        except Exception as e:
+            logging.error(f"Background roast worker error: {e}")
+
+    def get_roast(self, admin_project_id: Optional[str] = None, force_refresh: bool = False) -> Dict[str, Any]:
+        """Instant 0ms non-blocking retrieval of current roast bulletin."""
+        if force_refresh:
+            self.trigger_roast_sync()
+        return self.cached_roast
 
     def _polling_loop(self, interval: int):
         while not self._stop_event.is_set():
@@ -478,6 +558,10 @@ class BackgroundTelemetryManager:
             finally:
                 self.is_fetching = False
 
+            # Check if 4 minutes have passed since last roast, trigger in background
+            if (time.time() - self.last_roast_time) >= 240:
+                self.trigger_roast_sync()
+
             # Responsive sleep listening for trigger or stop events
             for _ in range(max(1, interval * 2)):
                 if self._stop_event.is_set():
@@ -490,6 +574,7 @@ class BackgroundTelemetryManager:
     def get_snapshot(self, admin_project_id: Optional[str] = None, use_mock: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Instant 0ms non-blocking retrieval of latest snapshot from memory.
+        NEVER performs network calls on caller thread.
         """
         if admin_project_id and admin_project_id != self.admin_project_id:
             self.admin_project_id = admin_project_id
@@ -506,10 +591,8 @@ class BackgroundTelemetryManager:
 
         self.ensure_started(admin_project_id)
 
-        # Cold start fallback if accessed before background thread completes first cycle
         if not self.cached_snapshot:
-            self.cached_snapshot = get_leaderboard_snapshot(self.admin_project_id, use_mock=False)
-            self.last_fetch_time = time.time()
+            self.cached_snapshot = create_initial_baseline_snapshot(self.admin_project_id)
 
         now = time.time()
         age = int(now - self.last_fetch_time) if self.last_fetch_time > 0 else 0
@@ -521,3 +604,4 @@ class BackgroundTelemetryManager:
             "mode": "LIVE_BACKGROUND"
         }
         return self.cached_snapshot, meta
+
