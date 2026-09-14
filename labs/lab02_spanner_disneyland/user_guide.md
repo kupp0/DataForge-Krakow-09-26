@@ -501,16 +501,29 @@ By default, your `disneyland` Spanner instance is provisioned with **100 Process
 Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner load test script:
 
 ```bash
-agy --dangerously-skip-permissions "Create and execute a high-throughput multi-threaded Python load test script for Cloud Spanner that simulates Disneyland attraction runs. 
+agy --dangerously-skip-permissions "Create and execute a high-throughput multi-threaded Python load test script (spanner_load_test.py) for Cloud Spanner that simulates Disneyland attraction runs. 
 The script should:
 1. Connect to Spanner instance 'disneyland' and database 'agent-lab' using google-cloud-spanner.
 2. Read the existing Attraction IDs from the 'Attraction' table.
-3. In parallel batches of mutations (target: 5,000 to 10,000 total runs across concurrent worker threads), commit AttractionRun records with PENDING_COMMIT_TIMESTAMP().
+3. Accept command-line arguments: --threads (default 8), --batch-size (default 100, capped at 500 to respect Spanner transaction limits), and --duration-seconds (default 90).
 4. Pick optimal ticket prices within the realistic $10.00 to $30.00 market window to maximize park gross revenue under price elasticity.
-5. Benchmark write throughput (runs/sec) and latency. If Spanner CPU saturates or write latency climbs, adapt your batching strategy or advise on compute scaling."
+5. In parallel worker threads, commit AttractionRun records using batch mutations with PENDING_COMMIT_TIMESTAMP(), including error handling and exponential backoff for transient gRPC errors.
+6. Benchmark sustained write throughput (runs/sec) and commit latency. Execute the script with --duration-seconds 90. If write latency climbs or CPU saturates, advise the operator on compute scaling—do NOT execute instance updates or modify processing units automatically."
 ```
 
-With `--dangerously-skip-permissions`, `agy` will generate the implementation plan and execute the load test autonomously without pausing for manual approvals.
+With `--dangerously-skip-permissions`, `agy` will generate the implementation plan, write `spanner_load_test.py`, and execute the baseline 90-second run autonomously.
+
+> [!TIP]
+> **Scaling Up Under Load**:
+> 1. Watch your Spanner CPU utilization in Cloud Monitoring or the event dashboard during the 90-second load test.
+> 2. Scale your instance compute (e.g. to 500 or 1000 PUs):
+>    ```bash
+>    gcloud spanner instances update disneyland --processing-units=500
+>    ```
+> 3. Re-run the generated Python script directly with higher concurrency to saturate the new capacity and unlock the **🚀 Throughput Titan** badge:
+>    ```bash
+>    python3 spanner_load_test.py --threads 16 --duration-seconds 90
+>    ```
 
 ### 5. Monitor Spanner Health & Watch the Global Leaderboard
 

@@ -18,7 +18,7 @@ The Admin Leaderboard is a centralized, real-time observability and gamification
 
 ## 2. Scoring System & Weightings
 
-Each participant team competes for a maximum composite score of **1,000 Points**. Points are calculated deterministically across 7 distinct dimensions:
+Each participant team competes for a base score of **1,000 Points** plus up to **100 Speed Velocity Bonus Points** (Max Composite Score: **1,100 Points**). Points are calculated deterministically across 8 distinct dimensions:
 
 | Category | Max Points | Measurement Target | Evaluation Logic |
 | :--- | :---: | :--- | :--- |
@@ -29,7 +29,8 @@ Each participant team competes for a maximum composite score of **1,000 Points**
 | **Compute Scaling** | **100** | Spanner cluster sizing | Based on Spanner Processing Units (PUs):<br>• 100 PUs (Baseline) = 25 pts<br>• 200–400 PUs = 50 pts<br>• 500–900 PUs = 75 pts<br>• $\ge$ 1,000 PUs (1+ Node) = 100 pts |
 | **Ingestion Velocity** | **100** | Real-time write throughput | Scaled linearly up to 200 runs/sec (`min(100, (qps / 200) * 100)`). |
 | **Revenue Optimization**| **200** | Net business profit | Scaled relative to the highest park profit in the event (`(revenue / max_revenue) * 200`). |
-| **TOTAL** | **1,000** | **Comprehensive Hackathon Score** | |
+| **Speed Velocity Bonus**| **+100** | TrueTime pipeline commit speed | Additive bonus based on `MIN(RunTimestamp)`. 100 bonus pts for the earliest finisher, decaying by 2.5 pts/min elapsed from first finisher. Eliminates 100% ties. |
+| **TOTAL** | **1,100** | **Comprehensive Hackathon Score** | |
 
 ---
 
@@ -63,18 +64,19 @@ Badges highlight specific engineering decisions or operational failure modes:
 | 🔥 | **Spanner Meltdown** | CPU utilization > 50% | Heavy query or transaction contention. |
 | 💎 | **Luxury Trap** | Average ticket price > \$35.00 | Overpriced tickets resulting in empty rides. |
 | 🏷️ | **Bargain Basement** | 0 < Ticket Price < \$8.00 | Underpriced tickets leaving gross margin on the table. |
+| ⚡ | **Speed Demon** | Speed Bonus $\ge$ 75 pts | Earliest pipeline write velocity milestone achieved. |
 | 💤 | **Sleeping Beauty** | 0 core tables deployed | Team has not applied base Terraform/DDL. |
 
 ---
 
 ## 5. Dashboard Architecture & Features
 
-The dashboard is built with Streamlit and organized into 4 primary views:
+The dashboard is built with Streamlit and organized into 5 primary views:
 
 ### Tab 1: 🏆 City Leaderboard & Awards
-* **Global Standings**: Ranked table sorted by Total Score.
+* **Global Standings**: Ranked table sorted by Total Score with Speed Bonus and component columns.
 * **Progress Badges**: Visual display of earned achievement badges.
-* **Component Breakdown**: Granular scores for Core DDL, Graph, Rows, Extended DDL, Scaling, Throughput, and Profit.
+* **Component Breakdown**: Granular scores for Core DDL, Graph, Rows, Extended DDL, Scaling, Throughput, Profit, and Speed Bonus.
 
 ### Tab 2: 📈 Business & Ride Execution Analytics
 * **Revenue vs. Cost Comparison**: Bar charts showing gross ticket revenue against operating expenses.
@@ -90,6 +92,24 @@ The dashboard is built with Streamlit and organized into 4 primary views:
 * **Table Verification**: Table presence indicators (`DisneylandPark`, `Attraction`, `Path`, `AttractionRun`).
 * **Property Graph State**: Live validation of `DisneylandGraph` property graph catalog.
 
+### Tab 5: 🎪 Disneyland Park Closing Ceremony
+* **Interactive Step Controller**: Stepper interface (`[⏮️ Reset Freeze]`, `[◀ Prev Event]`, `[Next Event ▶]`, `[⚡ Execute Live DML]`).
+* **5 Dramatic Park Disaster & Fortune Rounds**:
+  1. **🌧️ Monsoon over the Magic Kingdom**: 10% emergency discount on outdoor rides + 3% extortion fine on ticket prices $> \$25$.
+  2. **💥 Space Mountain Glitch**: 5% run deletion on Space Mountain (#40) (-5% rev) and 2% urgent engineering repair fee on 25% of parks.
+  3. **🕵️ Antitrust Price Gouging Audit**: 15% fine on Luxury Trap operators ($TicketPrice > $30); 5% tourism grant on family-friendly pricing ($10 - $18).
+  4. **⚡ Regional Spanner Power Brownout**: Audits compute sizing (1,000 PUs with < 50 runs/sec penalized -90 pts and 3% carbon tax; lean high-throughput rewarded +90 pts and 3% rebate).
+  5. **🎆 Mickey Centenary Jubilee Finale**: +20% score surge and +8% parade revenue boost for parks with active `DisneylandGraph` property graph and catalog depth.
+* **Kahoot-Style Round Analytics & Visualizations**:
+  - *KPI Scorecard*: Real-time badges showing Parks Impacted (%), Highest Climber (rank jump), Net Financial Swing ($), and Leaderboard Position Shifts.
+  - *Podium Cards*: Top 3 leaders displayed in gold, silver, and bronze cards with rank change chips.
+  - *Plotly Rank Movement Chart*: Horizontal bar chart highlighting ranks gained (`🟢 ▲`) or lost (`🔴 ▼`) for every park.
+  - *Plotly Financial Impact Chart*: Visualizing the exact dollar loss/gain distribution across the network.
+  - *Damage & Safety Inspector*: Filter breakdown separating damaged parks from safe/subsidized parks.
+* **Architecture Lessons & DML**: Displays the database concept and SQL statement for each round to bridge lab learning with gameplay.
+* **Dual Execution**: Computes animated in-memory rank shifts (`▲ +2`, `▼ -1`) while optionally dispatching live DML to participant Spanner databases.
+* **Grand Champion Crowning**: Automatic balloon animation and royal banner celebrating the final winner.
+
 ---
 
 ## 6. Live AI Roast Announcer HUD
@@ -103,7 +123,7 @@ To maintain high participant engagement, the dashboard incorporates an automated
   * Produces an entertaining roast summarizing their technical bottleneck.
   * Delivers a sharp 2-line rhyming couplet mocking their operational decisions.
 * **UI Delivery**: Rendered as a floating neon toast card in the bottom right corner with a 60-second animated progress bar. Hovering pauses the countdown.
-* **Admin Overrides**: Facilitators can force a re-roll (`🎭 Roast A Park Now`) or toggle persistent visibility (`Always Show Roast HUD`) from the sidebar.
+* **Admin Overrides**: Facilitators can start or stop the announcer completely using the sidebar toggle (`Enable AI Roaster Announcer`), force a live re-roll (`🎭 Roast A Park Now`), or toggle persistent visibility (`Always Show Roast HUD`).
 
 ---
 

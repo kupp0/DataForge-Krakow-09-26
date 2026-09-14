@@ -57,9 +57,13 @@ def calculate_attraction_run_metrics(ticket_price: float, runs: int, raw_visitor
         "runs": runs
     }
 
-def compute_participant_score(data: Dict[str, Any], max_revenue_in_event: float = 1.0) -> Dict[str, Any]:
+def compute_participant_score(
+    data: Dict[str, Any], 
+    max_revenue_in_event: float = 1.0,
+    earliest_run_timestamp: Any = None
+) -> Dict[str, Any]:
     """
-    Computes composite hackathon score (0 - 1000) and awards badges.
+    Computes composite hackathon score (0 - 1100) including TrueTime speed bonus and awards badges.
     """
     tables = data.get("tables", [])
     row_count = data.get("total_rows", 0)
@@ -69,6 +73,8 @@ def compute_participant_score(data: Dict[str, Any], max_revenue_in_event: float 
     ticket_price = data.get("ticket_price", 0.0)
     processing_units = data.get("processing_units", 100)
     qps = data.get("qps", 0.0)
+    runs = data.get("runs", 0)
+    first_run_timestamp = data.get("first_run_timestamp")
     
     # 1. Technical Core DDL Points (Max 300 pts)
     core_tables = ["disneylandpark", "attraction", "path"]
@@ -84,7 +90,7 @@ def compute_participant_score(data: Dict[str, Any], max_revenue_in_event: float 
     
     # 4. Extended DDL (AttractionRun) (Max 100 pts)
     extended_tables = ["attractionrun", "rideexecution", "parkrun"]
-    has_extended = any(any(ext in t.lower() for ext in extended_tables) for t in tables) or data.get("runs", 0) > 0
+    has_extended = any(any(ext in t.lower() for ext in extended_tables) for t in tables) or runs > 0
     extended_score = 100 if has_extended else 0
     
     # 5. Cluster Compute Scaling (Max 100 pts)
@@ -110,8 +116,23 @@ def compute_participant_score(data: Dict[str, Any], max_revenue_in_event: float 
         biz_score = min(200, int((revenue / max_revenue_in_event) * 200))
     else:
         biz_score = 0
+
+    # 8. TrueTime Speed Velocity Bonus (Max 100 bonus pts)
+    # Rewards early achievement using Spanner commit timestamps to prevent uniform 100% ties.
+    speed_bonus = 0
+    if runs > 0 and first_run_timestamp:
+        if earliest_run_timestamp is not None:
+            try:
+                diff_sec = (first_run_timestamp - earliest_run_timestamp).total_seconds()
+                diff_min = max(0.0, diff_sec / 60.0)
+                # 100 bonus points decaying by 2.5 pts per minute elapsed from the earliest finisher
+                speed_bonus = max(0, int(100 - diff_min * 2.5))
+            except Exception:
+                speed_bonus = 50
+        else:
+            speed_bonus = 100
         
-    total_score = ddl_score + graph_score + row_score + extended_score + scaling_score + throughput_score + biz_score
+    total_score = ddl_score + graph_score + row_score + extended_score + scaling_score + throughput_score + biz_score + speed_bonus
     
     # Badges
     badges = []
@@ -125,6 +146,8 @@ def compute_participant_score(data: Dict[str, Any], max_revenue_in_event: float 
         badges.append(("🚀", "Throughput Titan", f"High write velocity ({qps:.1f} runs/sec)"))
     if cpu_util > 50.0:
         badges.append(("🔥", "Spanner Meltdown", f"Pushing Spanner hard ({cpu_util:.1f}% CPU)"))
+    if speed_bonus >= 75:
+        badges.append(("⚡", "Speed Demon", f"First-mover execution velocity (+{speed_bonus} pts)"))
     if found_core == 0 and row_count == 0:
         badges.append(("💤", "Sleeping Beauty", "Park is quiet, no tables created yet"))
     if ticket_price > 35.0:
@@ -141,6 +164,7 @@ def compute_participant_score(data: Dict[str, Any], max_revenue_in_event: float 
         "scaling_score": scaling_score,
         "throughput_score": throughput_score,
         "biz_score": biz_score,
+        "speed_bonus": speed_bonus,
         "badges": badges
     }
 

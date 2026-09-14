@@ -151,6 +151,7 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
     ticket_price = 0.0
     processing_units = 100
     qps = 0.0
+    first_run_timestamp = None
 
     client = get_spanner_client(project_id)
     if not client:
@@ -161,7 +162,8 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
             "runs": runs,
             "ticket_price": ticket_price,
             "processing_units": processing_units,
-            "qps": qps
+            "qps": qps,
+            "first_run_timestamp": first_run_timestamp
         }
 
     try:
@@ -197,7 +199,8 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
                       COUNT(1), 
                       AVG(TicketPrice),
                       TIMESTAMP_DIFF(MAX(RunTimestamp), MIN(RunTimestamp), SECOND),
-                      COUNTIF(RunTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE))
+                      COUNTIF(RunTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE)),
+                      MIN(RunTimestamp)
                     FROM {t}
                     """
                     for r in s.execute_sql(sql_runs):
@@ -205,6 +208,7 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
                         ticket_price = float(r[1]) if r[1] is not None else 0.0
                         duration_sec = r[2] or 0
                         recent_runs = r[3] or 0
+                        first_run_timestamp = r[4]
                         
                         burst_qps = (runs / max(1, duration_sec)) if duration_sec > 0 and runs > 1 else (float(runs) if runs > 0 and duration_sec == 0 else 0.0)
                         live_qps = recent_runs / 120.0
@@ -220,8 +224,26 @@ def fetch_participant_spanner_details(project_id: str) -> Dict[str, Any]:
         "runs": runs,
         "ticket_price": ticket_price,
         "processing_units": processing_units,
-        "qps": qps
+        "qps": qps,
+        "first_run_timestamp": first_run_timestamp
     }
+
+def run_spanner_dml(project_id: str, query: str, params: Optional[dict] = None) -> tuple[bool, str, int]:
+    """
+    Executes a DML statement on Spanner in a read-write transaction with error handling.
+    """
+    client = get_spanner_client(project_id)
+    if not client:
+        return False, "Spanner client unavailable", 0
+    try:
+        inst = client.instance("disneyland")
+        db = inst.database("agent-lab")
+        def tx_dml(tx):
+            return tx.execute_update(query, params=params or {})
+        modified_count = db.run_in_transaction(tx_dml)
+        return True, f"Success: {modified_count} rows modified", modified_count
+    except Exception as e:
+        return False, str(e), 0
 
 def get_leaderboard_snapshot(
     admin_project_id: str = "dataforge26krk-6725",
@@ -248,6 +270,8 @@ def get_leaderboard_snapshot(
             pu_tiers = [100, 100, 200, 500, 500, 1000, 1000]
             mock_pu = pu_tiers[val % len(pu_tiers)]
             mock_qps = round(val * 24.5, 1) if val >= 4 else 0.0
+            mock_base_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=45)
+            mock_ts = (mock_base_time + datetime.timedelta(minutes=(6 - (val % 5)) * 4)) if val >= 4 else None
             rec = {
                 "project_id": proj_id,
                 "city": p["city"],
@@ -265,6 +289,7 @@ def get_leaderboard_snapshot(
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
+                "first_run_timestamp": mock_ts,
                 "is_facilitator": p.get("is_facilitator", False)
             }
             temp_records.append(rec)
@@ -311,6 +336,7 @@ def get_leaderboard_snapshot(
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
+                "first_run_timestamp": spanner_data["first_run_timestamp"],
                 "is_facilitator": p.get("is_facilitator", False)
             }
 
@@ -319,14 +345,26 @@ def get_leaderboard_snapshot(
 
     max_revenue = max([r["revenue"] for r in temp_records], default=1.0)
     
+    # Identify the earliest TrueTime run across all participants who launched runs
+    earliest_run_ts = None
+    for r in temp_records:
+        ts = r.get("first_run_timestamp")
+        if ts and r.get("runs", 0) > 0:
+            if earliest_run_ts is None or ts < earliest_run_ts:
+                earliest_run_ts = ts
+
     # Calculate final composite scores and badges
     results = []
     for r in temp_records:
-        scored = compute_participant_score(r, max_revenue_in_event=max_revenue)
+        scored = compute_participant_score(
+            r, 
+            max_revenue_in_event=max_revenue,
+            earliest_run_timestamp=earliest_run_ts
+        )
         r.update(scored)
         results.append(r)
         
-    # Sort descending by total score, then by revenue
+    # Sort descending by total score, then by revenue, then total rows
     results.sort(key=lambda x: (x["score"], x["revenue"], x["total_rows"]), reverse=True)
     for rank, r in enumerate(results, start=1):
         r["rank"] = rank
