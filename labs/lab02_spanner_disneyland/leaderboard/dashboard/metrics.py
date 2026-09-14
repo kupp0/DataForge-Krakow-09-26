@@ -23,7 +23,37 @@ except ImportError:
 
 from business_rules import calculate_attraction_run_metrics, compute_participant_score
 
-PROJECTS_TXT_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../projects.txt"))
+import subprocess
+
+def find_projects_txt() -> str:
+    """Finds projects.txt path dynamically by checking env or walking up parent directories."""
+    env_path = os.environ.get("PROJECTS_TXT_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    cur = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        candidate = os.path.join(cur, "projects.txt")
+        if os.path.exists(candidate):
+            return candidate
+        cur = os.path.dirname(cur)
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../projects.txt"))
+
+def get_default_admin_project() -> str:
+    """Dynamically determines the admin project from env, active gcloud config, or projects.txt."""
+    if os.environ.get("ADMIN_PROJECT_ID"):
+        return os.environ["ADMIN_PROJECT_ID"].strip()
+    try:
+        res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    pts = parse_projects_mapping(admin_project_id="")
+    if pts:
+        return pts[-1]["project_id"]
+    return ""
+
+PROJECTS_TXT_PATH = find_projects_txt()
 
 # Reusable client caches
 _MONITORING_CLIENT = None
@@ -47,16 +77,20 @@ def get_spanner_client(project_id: str):
             return None
     return _SPANNER_CLIENTS.get(project_id)
 
-def parse_projects_mapping(admin_project_id: str = "dataforge26krk-6725") -> List[Dict[str, Any]]:
+def parse_projects_mapping(admin_project_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    Parses projects.txt and returns all 25 participants, labeling admin as Facilitator.
+    Parses projects.txt and returns all participants, dynamically labeling admin as Facilitator.
     Format: PROJECT_ID, IAP_MEMBER, REGION, CITY
     """
+    if admin_project_id is None:
+        admin_project_id = get_default_admin_project()
+
     participants = []
-    if not os.path.exists(PROJECTS_TXT_PATH):
+    txt_path = find_projects_txt()
+    if not os.path.exists(txt_path):
         return participants
 
-    with open(PROJECTS_TXT_PATH, "r") as f:
+    with open(txt_path, "r") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -64,7 +98,7 @@ def parse_projects_mapping(admin_project_id: str = "dataforge26krk-6725") -> Lis
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 4:
                 proj_id, member, region, city = parts[0], parts[1], parts[2], parts[3]
-                is_admin = (proj_id == admin_project_id)
+                is_admin = bool(admin_project_id and proj_id == admin_project_id)
                 display_city = f"{city} (Facilitator)" if is_admin else city
                 participants.append({
                     "project_id": proj_id,
@@ -246,13 +280,18 @@ def run_spanner_dml(project_id: str, query: str, params: Optional[dict] = None) 
         return False, str(e), 0
 
 def get_leaderboard_snapshot(
-    admin_project_id: str = "dataforge26krk-6725",
-    use_mock: bool = False
+    admin_project_id: Optional[str] = None,
+    use_mock: bool = False,
+    selected_project_ids: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """
-    Compiles snapshot across all 25 participants in parallel.
+    Compiles snapshot across participants in parallel from projects.txt.
     """
+    if admin_project_id is None:
+        admin_project_id = get_default_admin_project()
     participants = parse_projects_mapping(admin_project_id)
+    if selected_project_ids:
+        participants = [p for p in participants if p["project_id"] in selected_project_ids]
     
     if use_mock:
         temp_records = []

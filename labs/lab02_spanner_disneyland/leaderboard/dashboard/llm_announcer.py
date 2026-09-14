@@ -10,7 +10,7 @@ import random
 import urllib.request
 import urllib.error
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +47,19 @@ FALLBACK_ROASTS = [
     }
 ]
 
+from metrics import get_default_admin_project
+
 def generate_roast_broadcast(
     leaderboard_data: List[Dict[str, Any]], 
-    admin_project_id: str = "dataforge26krk-6725",
+    admin_project_id: Optional[str] = None,
     model: str = "gemini-3.8-flash"
 ) -> Dict[str, Any]:
     """
     Calls Gemini 3.8 Flash to pick one participant city to roast with a witty joke and 2-line rhyme.
     Returns: dict with target_city, emoji, roast, rhyme, timestamp, model
     """
+    if admin_project_id is None:
+        admin_project_id = get_default_admin_project()
     now_str = time.strftime("%H:%M:%S")
     
     if not leaderboard_data:
@@ -186,7 +190,7 @@ Respond ONLY with valid JSON in this exact structure:
     return fallback
 
 # Legacy compatibility wrapper
-def generate_flash_commentary(leaderboard_data, admin_project_id="dataforge26krk-6725", model="gemini-3.8-flash"):
+def generate_flash_commentary(leaderboard_data, admin_project_id=None, model="gemini-3.8-flash"):
     roast_data = generate_roast_broadcast(leaderboard_data, admin_project_id, model)
     combined = f"[{roast_data['target_city']}] {roast_data['roast']} ✨ \"{roast_data['rhyme']}\""
     return combined, roast_data["timestamp"], roast_data["model"]

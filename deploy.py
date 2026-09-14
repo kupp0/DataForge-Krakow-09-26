@@ -289,7 +289,7 @@ def parse_and_validate_projects(auto_yes=False):
     return valid_projects, invalid_projects
 
 def clear_stale_tf_lock(project_id):
-    """Removes any stale Terraform state lock in GCS to prevent 412 Precondition errors."""
+    """Removes any stale Terraform state lock in GCS and purges automated Spanner backups."""
     lock_uri = f"gs://{project_id}-tfstate/terraform/state/default.tflock"
     logging.info(f"[{project_id}] Checking for stale Terraform state lock...")
     cmd = ["gcloud", "storage", "rm", lock_uri, f"--project={project_id}"]
@@ -298,6 +298,29 @@ def clear_stale_tf_lock(project_id):
         logging.info(f"[{project_id}] Successfully removed stale state lock: {lock_uri}")
     else:
         logging.debug(f"[{project_id}] No active or stale state lock found.")
+
+    # Purge automated Spanner backups on instance 'disneyland' so instance deletion is not blocked
+    try:
+        list_cmd = [
+            "gcloud", "spanner", "backups", "list",
+            "--instance=disneyland", f"--project={project_id}",
+            "--format=value(name)"
+        ]
+        b_res = subprocess.run(list_cmd, capture_output=True, text=True)
+        if b_res.returncode == 0 and b_res.stdout.strip():
+            for b_name in b_res.stdout.strip().splitlines():
+                b_name = b_name.strip()
+                if b_name:
+                    b_id = b_name.split("/")[-1]
+                    logging.info(f"[{project_id}] Deleting Spanner backup {b_id}...")
+                    subprocess.run([
+                        "gcloud", "spanner", "backups", "delete", b_id,
+                        "--instance=disneyland", f"--project={project_id}",
+                        "--quiet"
+                    ], capture_output=True, text=True)
+    except Exception as e:
+        logging.warning(f"[{project_id}] Warning during Spanner backup cleanup: {e}")
+
     return True, None
 
 def prepare_single_project(project):
@@ -497,6 +520,7 @@ def run_local_terraform_apply(project, builds, index):
                         zipf.write(item, item)
                 if os.path.exists("labs"):
                     for root, dirs, files in os.walk("labs"):
+                        dirs[:] = [d for d in dirs if d not in [".venv", "venv", "__pycache__", ".terraform", "leaderboard", "admin_leaderboard", ".agents"]]
                         for file in files:
                             file_path = os.path.join(root, file)
                             zipf.write(file_path, file_path)
@@ -930,6 +954,7 @@ def main():
                     zipf.write(item, item)
             if os.path.exists("labs"):
                 for root, dirs, files in os.walk("labs"):
+                    dirs[:] = [d for d in dirs if d not in [".venv", "venv", "__pycache__", ".terraform", "leaderboard", "admin_leaderboard", ".agents"]]
                     for file in files:
                         file_path = os.path.join(root, file)
                         zipf.write(file_path, file_path)

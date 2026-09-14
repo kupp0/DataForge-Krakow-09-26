@@ -135,54 +135,18 @@ resource "google_bigquery_table" "v_participant_tables_summary" {
   view {
     use_legacy_sql = false
     query          = <<-EOT
-      WITH participants AS (
-        SELECT 'dataforge26krk-6701' AS project_id, 'Tokyo' AS city, 'spanner_user_6701' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6702' AS project_id, 'London' AS city, 'spanner_user_6702' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6703' AS project_id, 'Paris' AS city, 'spanner_user_6703' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6704' AS project_id, 'New York' AS city, 'spanner_user_6704' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6705' AS project_id, 'Sydney' AS city, 'spanner_user_6705' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6706' AS project_id, 'Berlin' AS city, 'spanner_user_6706' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6707' AS project_id, 'Rome' AS city, 'spanner_user_6707' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6708' AS project_id, 'Madrid' AS city, 'spanner_user_6708' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6709' AS project_id, 'Toronto' AS city, 'spanner_user_6709' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6710' AS project_id, 'Singapore' AS city, 'spanner_user_6710' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6711' AS project_id, 'Seoul' AS city, 'spanner_user_6711' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6712' AS project_id, 'Amsterdam' AS city, 'spanner_user_6712' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6713' AS project_id, 'San Francisco' AS city, 'spanner_user_6713' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6714' AS project_id, 'Dubai' AS city, 'spanner_user_6714' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6715' AS project_id, 'Vienna' AS city, 'spanner_user_6715' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6716' AS project_id, 'Zurich' AS city, 'spanner_user_6716' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6717' AS project_id, 'Stockholm' AS city, 'spanner_user_6717' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6718' AS project_id, 'Chicago' AS city, 'spanner_user_6718' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6719' AS project_id, 'Los Angeles' AS city, 'spanner_user_6719' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6720' AS project_id, 'Warsaw' AS city, 'spanner_user_6720' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6721' AS project_id, 'Prague' AS city, 'spanner_user_6721' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6722' AS project_id, 'Dublin' AS city, 'spanner_user_6722' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6723' AS project_id, 'Oslo' AS city, 'spanner_user_6723' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6724' AS project_id, 'Copenhagen' AS city, 'spanner_user_6724' AS dataset_id UNION ALL
-        SELECT 'dataforge26krk-6725' AS project_id, 'Helsinki (Facilitator)' AS city, 'spanner_user_6725' AS dataset_id
-      ),
-      tables AS (
-        SELECT 
-          table_schema, 
-          table_name 
-        FROM `${var.admin_project_id}.region-${var.region}.INFORMATION_SCHEMA.TABLES`
-        WHERE table_schema LIKE 'spanner_user_%'
-      )
       SELECT 
-        p.city,
-        p.project_id,
-        p.dataset_id,
-        COUNT(t.table_name) AS total_tables_created,
-        STRING_AGG(t.table_name, ', ' ORDER BY t.table_name) AS tables_list,
-        COALESCE(LOGICAL_OR(LOWER(t.table_name) = 'disneylandpark'), false) AS has_disneylandpark,
-        COALESCE(LOGICAL_OR(LOWER(t.table_name) = 'attraction'), false) AS has_attraction,
-        COALESCE(LOGICAL_OR(LOWER(t.table_name) = 'path'), false) AS has_path,
-        COALESCE(LOGICAL_OR(LOWER(t.table_name) LIKE '%run%' OR LOWER(t.table_name) LIKE '%execution%'), false) AS has_runs_challenge
-      FROM participants p
-      LEFT JOIN tables t ON p.dataset_id = t.table_schema
-      GROUP BY p.city, p.project_id, p.dataset_id
-      ORDER BY total_tables_created DESC, p.city ASC
+        table_schema AS dataset_id,
+        participant_short_id,
+        COUNT(table_name) AS total_tables_created,
+        STRING_AGG(table_name, ', ' ORDER BY table_name) AS tables_list,
+        COALESCE(LOGICAL_OR(LOWER(table_name) = 'disneylandpark'), false) AS has_disneylandpark,
+        COALESCE(LOGICAL_OR(LOWER(table_name) = 'attraction'), false) AS has_attraction,
+        COALESCE(LOGICAL_OR(LOWER(table_name) = 'path'), false) AS has_path,
+        COALESCE(LOGICAL_OR(LOWER(table_name) LIKE '%run%' OR LOWER(table_name) LIKE '%execution%'), false) AS has_runs_challenge
+      FROM `${var.admin_project_id}.${google_bigquery_dataset.admin_analytics.dataset_id}.v_all_participant_tables`
+      GROUP BY table_schema, participant_short_id
+      ORDER BY total_tables_created DESC, table_schema ASC
     EOT
   }
 

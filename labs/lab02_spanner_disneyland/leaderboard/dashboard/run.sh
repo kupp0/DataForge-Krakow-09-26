@@ -11,7 +11,7 @@ PORT="${1:-8501}"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 
 echo "================================================================="
-echo "  🏰 Disneyland Spanner Admin Leaderboard Starting on :${PORT}  "
+echo "  🏰 Lab 2: Disneyland Spanner Admin Leaderboard Starting on :${PORT}  "
 echo "================================================================="
 
 # Create and activate local virtualenv if needed

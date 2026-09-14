@@ -18,13 +18,13 @@ importlib.reload(metrics)
 importlib.reload(business_rules)
 importlib.reload(llm_announcer)
 importlib.reload(ceremony_engine)
-from metrics import get_leaderboard_snapshot
+from metrics import get_leaderboard_snapshot, get_default_admin_project, parse_projects_mapping
 from business_rules import BENCHMARK_PRICE, calculate_elasticity_demand
 from llm_announcer import generate_flash_commentary
 
 # Streamlit Page Config
 st.set_page_config(
-    page_title="Disneyland Spanner Global Leaderboard",
+    page_title="Lab 2: Disneyland Spanner Global Leaderboard",
     page_icon="🏰",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -57,9 +57,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Main Title & Subheader
+st.title("🏰 Lab 2: Disneyland Spanner Global Leaderboard")
+st.markdown("Real-time telemetry, scoring, revenue gamification & closing ceremony for **Lab 2 (Disneyland Spanner Hackathon)**.")
+
 # Sidebar Controls
-st.sidebar.title("🏰 Admin Command Center")
-st.sidebar.markdown("**Admin Project**: `dataforge26krk-6725`")
+st.sidebar.title("🏰 Lab 2 Command Center")
+
+admin_project = st.sidebar.text_input("Admin Project ID", value=get_default_admin_project(), help="GCP project hosting BigQuery connection and central administration")
 st.sidebar.markdown("**Database**: `disneyland/agent-lab`")
 
 auto_refresh = st.sidebar.checkbox("Auto-Refresh (every 20s)", value=False)
@@ -71,10 +76,43 @@ if st.sidebar.button("🔄 Refresh Data Now"):
     st.cache_data.clear()
 
 @st.cache_data(ttl=15)
-def load_snapshot(mock_mode: bool):
-    return get_leaderboard_snapshot(admin_project_id="dataforge26krk-6725", use_mock=mock_mode)
+def load_snapshot(mock_mode: bool, admin_proj: str):
+    return get_leaderboard_snapshot(admin_project_id=admin_proj, use_mock=mock_mode)
 
-data = load_snapshot(use_mock_data)
+raw_data = load_snapshot(use_mock_data, admin_project)
+
+# Dynamic Project Scope Filtering
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎯 Project Scope")
+
+all_mapped = parse_projects_mapping(admin_project)
+mapped_options = [p["project_id"] for p in all_mapped]
+mapped_labels = {p["project_id"]: f"{p['city']} ({p['project_id'].split('-')[-1]})" for p in all_mapped}
+
+filter_inactive = st.sidebar.checkbox(
+    "Hide Inactive Projects",
+    value=True,
+    help="Exclude projects with 0 attraction runs and 0 created tables from the leaderboard"
+)
+
+selected_project_ids = st.sidebar.multiselect(
+    "Active Projects in Scope",
+    options=mapped_options,
+    default=mapped_options,
+    format_func=lambda pid: mapped_labels.get(pid, pid),
+    help="Select which participant projects are active in this hackathon session"
+)
+
+# Filter raw data
+data = [d for d in raw_data if d.get("project_id") in selected_project_ids]
+
+if filter_inactive:
+    data = [d for d in data if (d.get("total_rows", 0) > 0 or d.get("runs", 0) > 0 or len(d.get("tables", [])) > 0)]
+
+# Re-rank filtered entries
+for rank_idx, item in enumerate(data, start=1):
+    item["rank"] = rank_idx
+
 df = pd.DataFrame(data)
 
 st.sidebar.markdown("---")
@@ -237,7 +275,7 @@ st.divider()
 
 # Tabs
 tab_leaderboard, tab_business, tab_spanner, tab_schema, tab_ceremony = st.tabs([
-    "🏆 City Leaderboard & Awards",
+    "🏆 Lab 2 City Leaderboard & Awards",
     "💰 Disneyland Business Arena (Revenue & Pricing)",
     "⚡ Spanner Telemetry & Load",
     "🗂️ DDL & Schema Progress",

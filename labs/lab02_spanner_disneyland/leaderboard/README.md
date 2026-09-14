@@ -1,6 +1,6 @@
-# Disneyland Spanner Hackathon: Admin Leaderboard & Telemetry Guide
+# Lab 2: Disneyland Spanner Leaderboard & Telemetry Guide
 
-This document defines the operational architecture, scoring rules, business heuristics, and monitoring telemetry powering the central **Disneyland Spanner Global Leaderboard**.
+This document defines the operational architecture, scoring rules, business heuristics, and monitoring telemetry powering the central **Lab 2: Disneyland Spanner Global Leaderboard**.
 
 ---
 
@@ -155,7 +155,7 @@ Pulls rolling 5-minute telemetry intervals using `MetricServiceClient`:
 
 * **Start Dashboard**:
   ```bash
-  ./admin_leaderboard/dashboard/run.sh 8501
+  ./labs/lab02_spanner_disneyland/leaderboard/dashboard/run.sh 8501
   ```
 * **Federated Infrastructure**:
-  The admin project (`dataforge26krk-6725`) hosts a BigQuery dataset (`admin_leaderboard`) with external federated connections to each participant's Cloud Spanner instance, provisioned via Terraform in `admin_leaderboard/infra/`.
+  The admin project hosts a BigQuery dataset (`admin_leaderboard`) with external federated connections to each participant's Cloud Spanner instance, provisioned dynamically via Terraform in `labs/lab02_spanner_disneyland/leaderboard/infra/` using `./labs/lab02_spanner_disneyland/leaderboard/deploy_admin.sh`.

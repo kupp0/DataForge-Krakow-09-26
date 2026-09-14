@@ -143,12 +143,17 @@ LIMIT 3;""",
     }
 ]
 
+def is_project_active(p: Dict[str, Any]) -> bool:
+    """Identifies if a project is actively participating (created tables, runs, or rows)."""
+    return bool(len(p.get("tables", [])) > 0 or p.get("runs", 0) > 0 or p.get("total_rows", 0) > 0)
+
 def apply_event_simulation(
     base_standings: List[Dict[str, Any]], 
     round_id: int
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Applies the simulation up to the given round_id (1..5) in sequence.
+    Strictly factors in active projects so idle sandboxes are not targeted by disasters.
     Returns (updated_standings, round_metadata).
     """
     participants = [copy.deepcopy(p) for p in base_standings]
@@ -176,9 +181,33 @@ def apply_event_simulation(
             "sql_statement": "SELECT * FROM AttractionRun@{EXACT_STALENESS = '0s'};"
         }
 
+    # Partition active vs inactive participants based on Spanner table existence & runs
+    active_pids = set(p["project_id"] for p in participants if is_project_active(p))
+    # If all projects are idle (e.g. previewing before start), treat all as active for demo
+    if not active_pids:
+        active_pids = set(p["project_id"] for p in participants)
+        
+    active_sorted = sorted(list(active_pids))
+    n_active = len(active_sorted)
+
+    # Deterministic selection targeting exact percentage of ACTIVE participants
+    n_r1 = max(1, round(n_active * 0.50))
+    r1_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_monsoon"))[:n_r1])
+    
+    n_r2 = max(1, round(n_active * 0.25))
+    r2_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_glitch"))[:n_r2])
+    
+    n_r4 = max(1, round(n_active * 0.33))
+    r4_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_brownout"))[:n_r4])
+
     for r in range(1, round_id + 1):
         for p in participants:
             proj_id = p["project_id"]
+            if proj_id not in active_pids:
+                if r == round_id:
+                    p["round_impact_text"] = "💤 Idle Sandbox: No Spanner tables created yet."
+                continue
+
             ticket_price = p.get("ticket_price", 0.0)
             revenue = p.get("revenue", 0.0)
             score = p.get("score", 0)
@@ -189,9 +218,9 @@ def apply_event_simulation(
             has_graph = p.get("has_graph", False)
             total_rows = p.get("total_rows", 0)
             
-            # --- ROUND 1: Monsoon Weather (50% of parks) ---
+            # --- ROUND 1: Monsoon Weather (50% of active parks) ---
             if r == 1:
-                is_hit = (hash(proj_id) % 2 == 0)
+                is_hit = (proj_id in r1_targets)
                 if is_hit:
                     rev_loss = round(revenue * 0.10, 2)
                     p["revenue"] = max(0.0, revenue - rev_loss)
@@ -220,9 +249,9 @@ def apply_event_simulation(
                     if r == round_id:
                         p["round_impact_text"] = "☀️ Sunshine Shield: Park stayed dry and dodged rain refunds!"
 
-            # --- ROUND 2: Space Mountain Breakdown (25% of parks) ---
+            # --- ROUND 2: Space Mountain Breakdown (25% of active parks) ---
             elif r == 2:
-                is_hit = (hash(proj_id + "glitch") % 4 == 0)
+                is_hit = (proj_id in r2_targets)
                 if is_hit:
                     lost_runs = max(1, int(runs * 0.05)) if runs > 0 else 0
                     p["runs"] = max(0, runs - lost_runs)
@@ -346,12 +375,26 @@ def execute_spanner_round_live(
     if not dml_query:
         return [{"project_id": p["project_id"], "city": p.get("city", ""), "status": "SKIPPED", "message": "Round has no database DML modifications."} for p in participants]
 
+    active_pids = set(p["project_id"] for p in participants if is_project_active(p))
+    if not active_pids:
+        active_pids = set(p["project_id"] for p in participants)
+    active_sorted = sorted(list(active_pids))
+    n_active = len(active_sorted)
+
+    n_r1 = max(1, round(n_active * 0.50))
+    r1_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_monsoon"))[:n_r1])
+    
+    n_r2 = max(1, round(n_active * 0.25))
+    r2_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_glitch"))[:n_r2])
+
     target_projects = []
     for p in participants:
         proj_id = p["project_id"]
-        if round_id == 1 and (hash(proj_id) % 2 == 0):
+        if not is_project_active(p):
+            continue
+        if round_id == 1 and (proj_id in r1_targets):
             target_projects.append((proj_id, p.get("city", "")))
-        elif round_id == 2 and (hash(proj_id + "glitch") % 4 == 0):
+        elif round_id == 2 and (proj_id in r2_targets):
             target_projects.append((proj_id, p.get("city", "")))
 
     def run_on_project(item):

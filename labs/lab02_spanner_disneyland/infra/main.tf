@@ -35,6 +35,7 @@ resource "google_spanner_instance" "disneyland" {
   display_name     = "Disneyland AI Agents"
   edition          = "ENTERPRISE"
   processing_units = 100
+  force_destroy    = true
   depends_on       = [google_project_service.enabled_apis]
 }
 
