@@ -77,6 +77,17 @@ st.markdown("""
         opacity: 0 !important;
     }
 
+    /* Completely hide the top-right Streamlit Deploy button */
+    .stDeployButton,
+    .stAppDeployButton,
+    div[data-testid="stDeployButton"],
+    div[data-testid="stAppDeployButton"],
+    button[data-testid="stDeployButton"] {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+    }
+
     /* Modal Dialog Flashy Styling */
     div[role="dialog"] {
         max-width: 95vw !important;
