@@ -447,6 +447,9 @@ Once `agy` outputs the service URL (e.g. `https://disneyland-navigator-xxxxx-ew.
 2. Select attractions in the **Interactive Route Finder** to verify graph navigation.
 3. Open the **Chat Terminal** to verify the GenAI agent connects to Vertex AI and queries Spanner.
 
+> [!TIP]
+> **Leaderboard Points & Badges**: Successfully deploying your Cloud Run service awards **100 base points** on the central leaderboard, plus a **Pioneer Speed Bonus** (up to **+50 points** for early deployments), and unlocks the **☁️ Cloud Pilot** and **⚡ Sonic Deployer** badges!
+
 ---
 
 ### 🧭 7. Deep Dive: Spanner Graph Queries under the Hood `[UNDERSTAND]`

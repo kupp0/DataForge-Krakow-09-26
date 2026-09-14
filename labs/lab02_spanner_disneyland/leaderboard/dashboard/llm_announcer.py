@@ -77,6 +77,7 @@ def generate_roast_broadcast(
             "cpu": round(r.get("cpu_utilization_pct", 0), 1),
             "qps": round(r.get("qps", 0), 1),
             "has_graph": r.get("has_graph", False),
+            "has_cloud_run": r.get("has_cloud_run", False),
             "pus": r.get("processing_units", 100)
         })
 
@@ -90,6 +91,7 @@ Task:
    - If their score or rows are near zero, tease them for sleeping on Main Street or taking a union break.
    - If they are #1, playfully accuse them of bribing the fairy godmother with counterfeit Disney dollars.
    - If they lack a property graph, roast them for getting lost in Fantasyland without a map.
+   - If they deployed Cloud Run, praise or roast their supersonic cloud deployment speed.
    - If their throughput (QPS) is wild, wonder if they hooked their laptop to the park's primary power grid.
 2. Produce a sharp, hilarious 1-sentence roast joke.
 3. Produce a funny, catchy 2-line rhyming couplet about that specific city's engineering performance.

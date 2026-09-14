@@ -88,6 +88,20 @@ PROJECTS_TXT_PATH = find_projects_txt()
 # Reusable client caches
 _MONITORING_CLIENT = None
 _SPANNER_CLIENTS: Dict[str, Any] = {}
+_AUTHED_SESSION = None
+
+def get_authorized_session():
+    global _AUTHED_SESSION
+    if _AUTHED_SESSION is None:
+        try:
+            import google.auth
+            from google.auth.transport.requests import AuthorizedSession
+            credentials, _ = google.auth.default()
+            _AUTHED_SESSION = AuthorizedSession(credentials)
+        except Exception as e:
+            logging.warning(f"Could not initialize AuthorizedSession for Cloud Run: {e}")
+            _AUTHED_SESSION = None
+    return _AUTHED_SESSION
 
 def get_monitoring_client():
     global _MONITORING_CLIENT
@@ -202,6 +216,91 @@ def fetch_participant_monitoring_metrics(
     return {
         "cpu_utilization_pct": round(max_cpu, 2),
         "storage_mb": storage_mb
+    }
+
+def fetch_participant_cloud_run(
+    project_id: str, 
+    session: Optional[Any] = None, 
+    fallback_prev: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Direct Cloud Run v2 REST API inspection to check for deployed disneyland-navigator services.
+    """
+    if session is None:
+        session = get_authorized_session()
+        
+    if not session:
+        if fallback_prev and fallback_prev.get("has_cloud_run"):
+            return {
+                "has_cloud_run": fallback_prev.get("has_cloud_run", False),
+                "cloud_run_url": fallback_prev.get("cloud_run_url", ""),
+                "cloud_run_create_time": fallback_prev.get("cloud_run_create_time"),
+                "cloud_run_status": fallback_prev.get("cloud_run_status", "UNKNOWN")
+            }
+        return {
+            "has_cloud_run": False,
+            "cloud_run_url": "",
+            "cloud_run_create_time": None,
+            "cloud_run_status": "NONE"
+        }
+
+    try:
+        url = f"https://run.googleapis.com/v2/projects/{project_id}/locations/-/services"
+        resp = session.get(url, timeout=4)
+        if resp.status_code == 200:
+            data = resp.json()
+            services = data.get("services", [])
+            target = None
+            for s in services:
+                name = s.get("name", "").lower()
+                if "disneyland" in name or "navigator" in name:
+                    target = s
+                    break
+            if not target and services:
+                target = services[0]
+
+            if target:
+                uri = target.get("uri", "")
+                create_time_str = target.get("createTime")
+                create_time = None
+                if create_time_str:
+                    try:
+                        clean_ts = create_time_str.replace("Z", "+00:00")
+                        create_time = datetime.datetime.fromisoformat(clean_ts)
+                    except Exception:
+                        create_time = None
+                        
+                status = "READY"
+                conditions = target.get("conditions", [])
+                for cond in conditions:
+                    if cond.get("type") in ["Ready", "RoutesReady"]:
+                        if cond.get("state") != "CONDITION_SUCCEEDED":
+                            status = "DEGRADED"
+                if target.get("reconciling"):
+                    status = "DEPLOYING"
+
+                return {
+                    "has_cloud_run": True,
+                    "cloud_run_url": uri,
+                    "cloud_run_create_time": create_time,
+                    "cloud_run_status": status
+                }
+    except Exception as e:
+        logging.debug(f"Cloud Run check error for {project_id}: {e}")
+
+    if fallback_prev and fallback_prev.get("has_cloud_run"):
+        return {
+            "has_cloud_run": fallback_prev.get("has_cloud_run", False),
+            "cloud_run_url": fallback_prev.get("cloud_run_url", ""),
+            "cloud_run_create_time": fallback_prev.get("cloud_run_create_time"),
+            "cloud_run_status": fallback_prev.get("cloud_run_status", "UNKNOWN")
+        }
+
+    return {
+        "has_cloud_run": False,
+        "cloud_run_url": "",
+        "cloud_run_create_time": None,
+        "cloud_run_status": "NONE"
     }
 
 def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -398,6 +497,10 @@ def get_leaderboard_snapshot(
             mock_qps = round(val * 24.5, 1) if val >= 4 else 0.0
             mock_base_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=45)
             mock_ts = (mock_base_time + datetime.timedelta(minutes=(6 - (val % 5)) * 4)) if val >= 4 else None
+            has_cr = val >= 2
+            mock_cr_time = (mock_base_time + datetime.timedelta(minutes=val * 4)) if has_cr else None
+            mock_cr_url = f"https://disneyland-navigator-{p['short_id']}-ew.a.run.app" if has_cr else ""
+            mock_cr_status = "READY" if has_cr else "NONE"
             rec = {
                 "project_id": proj_id,
                 "city": p["city"],
@@ -416,11 +519,16 @@ def get_leaderboard_snapshot(
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
                 "first_run_timestamp": mock_ts,
+                "has_cloud_run": has_cr,
+                "cloud_run_url": mock_cr_url,
+                "cloud_run_create_time": mock_cr_time,
+                "cloud_run_status": mock_cr_status,
                 "is_facilitator": p.get("is_facilitator", False)
             }
             temp_records.append(rec)
     else:
         mon_client = get_monitoring_client()
+        auth_session = get_authorized_session()
 
         now = datetime.datetime.now(datetime.timezone.utc)
         start_time = now - datetime.timedelta(minutes=15)
@@ -439,8 +547,11 @@ def get_leaderboard_snapshot(
             
             # 2. Monitoring metrics
             mon_metrics = fetch_participant_monitoring_metrics(proj_id, interval, mon_client)
+
+            # 3. Cloud Run inspection
+            cr_data = fetch_participant_cloud_run(proj_id, session=auth_session, fallback_prev=prev_data)
             
-            # 3. Business metrics
+            # 4. Business metrics
             biz = calculate_attraction_run_metrics(
                 spanner_data["ticket_price"], 
                 spanner_data["runs"]
@@ -470,6 +581,10 @@ def get_leaderboard_snapshot(
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
                 "first_run_timestamp": spanner_data["first_run_timestamp"],
+                "has_cloud_run": cr_data["has_cloud_run"],
+                "cloud_run_url": cr_data["cloud_run_url"],
+                "cloud_run_create_time": cr_data["cloud_run_create_time"],
+                "cloud_run_status": cr_data["cloud_run_status"],
                 "is_facilitator": p.get("is_facilitator", False)
             }
 
@@ -486,13 +601,28 @@ def get_leaderboard_snapshot(
             if earliest_run_ts is None or ts < earliest_run_ts:
                 earliest_run_ts = ts
 
+    # Identify Cloud Run deployments and determine relative arrival ranking
+    cloud_deployments = []
+    for r in temp_records:
+        if r.get("has_cloud_run"):
+            ts = r.get("cloud_run_create_time")
+            sort_ts = ts if ts else datetime.datetime.now(datetime.timezone.utc)
+            cloud_deployments.append((r["project_id"], sort_ts))
+
+    cloud_deployments.sort(key=lambda x: x[1])
+    cloud_deploy_ranks = {pid: rank for rank, (pid, _) in enumerate(cloud_deployments, start=1)}
+    earliest_cloud_run_ts = cloud_deployments[0][1] if cloud_deployments else None
+
     # Calculate final composite scores and badges
     results = []
     for r in temp_records:
+        cr_rank = cloud_deploy_ranks.get(r["project_id"], 0)
         scored = compute_participant_score(
             r, 
             max_revenue_in_event=max_revenue,
-            earliest_run_timestamp=earliest_run_ts
+            earliest_run_timestamp=earliest_run_ts,
+            earliest_cloud_run_timestamp=earliest_cloud_run_ts,
+            cloud_run_rank=cr_rank
         )
         r.update(scored)
         results.append(r)
@@ -533,6 +663,13 @@ def create_initial_baseline_snapshot(admin_project_id: Optional[str] = None) -> 
             "revenue": 0.0,
             "profit": 0.0,
             "first_run_timestamp": None,
+            "has_cloud_run": False,
+            "cloud_run_url": "",
+            "cloud_run_create_time": None,
+            "cloud_run_status": "NONE",
+            "cloud_run_score": 0,
+            "cloud_run_bonus": 0,
+            "cloud_run_total": 0,
             "is_facilitator": p.get("is_facilitator", False),
             "rank": rank,
             "score": 0,
