@@ -26,3 +26,6 @@ deploy_logs/
 *.log
 .telemetry_cache.json
 
+# Participant project credentials
+projects.txt
+
