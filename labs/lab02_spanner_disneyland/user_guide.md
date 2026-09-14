@@ -569,23 +569,49 @@ Now that you have run your initial load test against the baseline instance, eval
   > 4. Test the generated embeddings with a semantic similarity query finding the top 5 attractions matching 'spooky haunted mansion and ghosts'."
   > ```
 
-  **Manual Spanner Studio Query (Alternative)**:
-  Once the model and embeddings are backfilled, run semantic similarity queries directly in **Spanner Studio** using native `COSINE_DISTANCE`:
-  ```sql
-  -- Find attractions semantically similar to a user query
-  SELECT AttractionID, Name, Land, Type, Description
-  FROM Attraction
-  WHERE Embedding IS NOT NULL
-  ORDER BY COSINE_DISTANCE(
-    Embedding,
-    (SELECT embeddings.values 
-     FROM ML.PREDICT(
-       MODEL TextMultilingualEmbedding, 
-       (SELECT 'thrilling wild west gold mine roller coaster' AS content)
-     ))
-  ) ASC
-  LIMIT 5;
-  ```
+  **Manual Spanner Studio Steps (Alternative)**:
+  If you prefer executing the queries directly in **Spanner Studio**:
+  
+  1. **Register the Remote Vertex AI Model**:
+     ```sql
+     CREATE OR REPLACE MODEL TextMultilingualEmbeddingGekko
+     INPUT(content STRING(MAX))
+     OUTPUT(embeddings STRUCT<values ARRAY<FLOAT32>>)
+     REMOTE OPTIONS (
+       endpoint = '//aiplatform.googleapis.com/projects/<YOUR_PROJECT_ID>/locations/<YOUR_REGION>/publishers/google/models/text-multilingual-embedding-002',
+       default_batch_size = 5
+     );
+     ```
+
+  2. **Backfill Embeddings via In-Database DML**:
+     ```sql
+     UPDATE Attraction
+     SET Embedding = (
+       SELECT embeddings.values
+       FROM SAFE.ML.PREDICT(
+         MODEL TextMultilingualEmbeddingGekko,
+         (SELECT Attraction.Description AS content)
+       )
+     )
+     WHERE Description IS NOT NULL AND Embedding IS NULL;
+     ```
+
+  3. **Run Semantic Similarity Vector Search**:
+     ```sql
+     -- Find the 5 attractions most semantically similar to a user query
+     SELECT AttractionID, Name, Land, Type, Description
+     FROM Attraction
+     WHERE Embedding IS NOT NULL
+     ORDER BY COSINE_DISTANCE(
+       Embedding,
+       (SELECT embeddings.values 
+        FROM ML.PREDICT(
+          MODEL TextMultilingualEmbeddingGekko, 
+          (SELECT 'thrilling wild west gold mine roller coaster' AS content)
+        ))
+     ) ASC
+     LIMIT 5;
+     ```
 * **⚡ Lock Contention Diagnostics**: If seeing write timeouts under heavy load, check Spanner lock contention:
   ```sql
   SELECT * FROM SPANNER_SYS.LOCK_STATS_TOP_10MINUTE;
