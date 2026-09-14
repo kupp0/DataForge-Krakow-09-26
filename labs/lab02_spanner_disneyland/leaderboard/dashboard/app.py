@@ -54,6 +54,41 @@ st.markdown("""
     .rank-1 { color: #ffd700; font-weight: bold; font-size: 1.2em; }
     .rank-2 { color: #c0c0c0; font-weight: bold; font-size: 1.1em; }
     .rank-3 { color: #cd7f32; font-weight: bold; font-size: 1.1em; }
+
+    /* =========================================================================
+       SEAMLESS ZERO-FLICKER BACKGROUND UPDATES (No Grey-Out / No Dims)
+       ========================================================================= */
+    /* Prevent Streamlit from dimming/greying out stale elements during rerun */
+    [data-stale="true"],
+    div[data-testid="stElementContainer"][data-stale="true"],
+    .stElementContainer[data-stale="true"],
+    [data-test-script-state="running"] [data-stale="true"],
+    .stApp[data-test-script-state="running"] [data-stale="true"],
+    .stApp[data-test-script-state="running"] [data-testid="stMain"] [data-stale="true"],
+    .stApp[data-test-script-state="running"] [data-testid="stVerticalBlock"] > div {
+        opacity: 1 !important;
+        transition: none !important;
+        filter: none !important;
+    }
+
+    /* Disable markdown shimmering text masks during reload */
+    span.stMarkdownShimmer {
+        animation: none !important;
+        mask-image: none !important;
+    }
+
+    /* Completely hide the distracting top-right 'Stop / Running' status indicator */
+    div[data-testid="stStatusWidget"],
+    .stStatusWidget {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+    }
+
+    /* Prevent transition flashing on element containers */
+    .stElementContainer {
+        transition: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
