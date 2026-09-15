@@ -26,6 +26,5 @@ deploy_logs/
 *.log
 .telemetry_cache.json
 
-# Participant project credentials
+# Event Participant Project Mapping (Sensitive GCP Project IDs)
 projects.txt
-

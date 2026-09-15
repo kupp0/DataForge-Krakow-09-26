@@ -56,15 +56,16 @@ def _load_snapshot_from_cache() -> Optional[List[Dict[str, Any]]]:
     return None
 
 def find_projects_txt() -> str:
-    """Finds projects.txt path dynamically by checking env or walking up parent directories."""
+    """Finds projects.txt (or projects.example.txt) path dynamically by checking env or walking up parent directories."""
     env_path = os.environ.get("PROJECTS_TXT_PATH")
     if env_path and os.path.exists(env_path):
         return env_path
     cur = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
-        candidate = os.path.join(cur, "projects.txt")
-        if os.path.exists(candidate):
-            return candidate
+        for candidate_name in ["projects.txt", "projects.example.txt", "projects.txt.example"]:
+            candidate = os.path.join(cur, candidate_name)
+            if os.path.exists(candidate):
+                return candidate
         cur = os.path.dirname(cur)
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../projects.txt"))
 
