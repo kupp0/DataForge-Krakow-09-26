@@ -23,6 +23,15 @@ if [ ! -d "$VENV_DIR" ]; then
     "$VENV_DIR/bin/pip" install -r "${SCRIPT_DIR}/requirements.txt"
 fi
 
+# Set default quota project to admin project if not explicitly set
+if [ -z "${GOOGLE_CLOUD_QUOTA_PROJECT:-}" ]; then
+    ADMIN_PROJ="${ADMIN_PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+    if [ -n "$ADMIN_PROJ" ]; then
+        export GOOGLE_CLOUD_QUOTA_PROJECT="$ADMIN_PROJ"
+        echo "🔑 Using Quota Project: ${GOOGLE_CLOUD_QUOTA_PROJECT}"
+    fi
+fi
+
 # Run Streamlit using the virtualenv
 echo "🚀 Launching Streamlit UI..."
 "$VENV_DIR/bin/streamlit" run app.py --server.port="${PORT}" --server.headless=true

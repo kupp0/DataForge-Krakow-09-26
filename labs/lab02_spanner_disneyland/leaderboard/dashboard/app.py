@@ -16,12 +16,12 @@ import business_rules
 import llm_announcer
 import ceremony_engine
 import ceremony_audio
-for _mod in [business_rules, llm_announcer, ceremony_engine, ceremony_audio]:
+for _mod in [metrics, business_rules, llm_announcer, ceremony_engine, ceremony_audio]:
     try:
         importlib.reload(_mod)
     except Exception:
         pass
-from metrics import get_leaderboard_snapshot, get_default_admin_project, parse_projects_mapping
+from metrics import get_leaderboard_snapshot, get_default_admin_project, parse_projects_mapping, clear_telemetry_cache
 from business_rules import BENCHMARK_PRICE, calculate_elasticity_demand
 from llm_announcer import generate_flash_commentary
 
@@ -300,6 +300,14 @@ with col_ref2:
     if st.button("🔄 Redraw UI"):
         st.rerun()
 
+if st.sidebar.button("🧹 Clean Cache / Restart", help="Wipes disk and in-memory cache, clears session state, and restarts the application", use_container_width=True):
+    telemetry_mgr.reset_and_clear_cache()
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.session_state.clear()
+    st.toast("Cache cleaned and application restarted!", icon="🧹")
+    st.rerun()
+
 # Telemetry Poller status badge
 _, initial_status = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
 age = initial_status["age_seconds"]
@@ -330,14 +338,17 @@ if roaster_enabled:
     col_rst1, col_rst2 = st.sidebar.columns(2)
     with col_rst1:
         if st.sidebar.button("🎭 Roast Now", help="Draft a fresh AI roast immediately"):
-            telemetry_mgr.trigger_roast_sync()
-            st.session_state["roast_dismissed"] = False
-            st.toast("🎙️ Live Announcer is drafting a fresh roast in background!", icon="🎭")
+            with st.spinner("🎙️ Drafting fresh Gemini 3.8 Flash roast..."):
+                telemetry_mgr.generate_immediate_roast(admin_project_id=admin_project)
+                st.session_state["roast_dismissed"] = False
+                st.session_state["clear_dismissed_ts"] = True
+            st.toast("🎙️ Fresh AI roast is now on the air!", icon="🎭")
             st.rerun()
     with col_rst2:
         if st.session_state.get("roast_dismissed", False):
             if st.sidebar.button("👁️ Show HUD", help="Restore the floating roast card"):
                 st.session_state["roast_dismissed"] = False
+                st.session_state["clear_dismissed_ts"] = True
                 st.rerun()
         else:
             if st.sidebar.button("❌ Hide HUD", help="Dismiss the floating roast card"):
@@ -349,15 +360,27 @@ if roaster_enabled:
     DISPLAY_SECONDS = 60  # Stays on screen for 1 minute (60s)
 
     now_ts = time.time()
-    elapsed_in_cycle = int(now_ts) % CYCLE_SECONDS
-    is_active_window = elapsed_in_cycle < DISPLAY_SECONDS
-    remaining_seconds = max(1, DISPLAY_SECONDS - elapsed_in_cycle)
+    last_r_time = telemetry_mgr.last_roast_time
+
+    # If roaster was enabled and never roasted, activate now
+    if last_r_time == 0:
+        telemetry_mgr.last_roast_time = now_ts
+        last_r_time = now_ts
+        telemetry_mgr.trigger_roast_sync()
+
+    roast_age = (now_ts - last_r_time) if last_r_time > 0 else 0
+    is_active_window = roast_age < DISPLAY_SECONDS
+    remaining_seconds = max(1, int(DISPLAY_SECONDS - roast_age))
+
+    # Trigger next background roast when cycle duration has elapsed
+    if roast_age >= CYCLE_SECONDS:
+        telemetry_mgr.trigger_roast_sync()
 
     if is_active_window or always_show_roast:
         status_label = f"{remaining_seconds}s left" if (is_active_window and not always_show_roast) else "Pinned / Live"
         st.sidebar.markdown(f"🎙️ **Live Roast Status**: 🔴 On-Air ({status_label})")
     else:
-        time_until_next = CYCLE_SECONDS - elapsed_in_cycle
+        time_until_next = max(1, int(CYCLE_SECONDS - roast_age))
         mins = time_until_next // 60
         secs = time_until_next % 60
         st.sidebar.markdown(f"⏳ **Next Roast In**: `{mins}m {secs:02d}s`")
@@ -840,6 +863,7 @@ def render_live_telemetry_board(
         item["rank"] = rank_idx
 
     if data:
+        telemetry_mgr.set_active_snapshot(data)
         df = pd.DataFrame(data)
     else:
         df = pd.DataFrame(columns=[
@@ -854,9 +878,10 @@ def render_live_telemetry_board(
         CYCLE_SECONDS = 240
         DISPLAY_SECONDS = 60
         now_ts = time.time()
-        elapsed_in_cycle = int(now_ts) % CYCLE_SECONDS
-        is_active_window = elapsed_in_cycle < DISPLAY_SECONDS
-        remaining_seconds = max(1, DISPLAY_SECONDS - elapsed_in_cycle)
+        last_r_time = telemetry_mgr.last_roast_time
+        roast_age = (now_ts - last_r_time) if last_r_time > 0 else 0
+        is_active_window = roast_age < DISPLAY_SECONDS
+        remaining_seconds = max(1, int(DISPLAY_SECONDS - roast_age))
 
         if is_active_window or always_show_roast:
             roast = telemetry_mgr.get_roast(admin_project)
@@ -939,7 +964,7 @@ def render_live_telemetry_board(
             }}
             </style>
 
-            <div class="roast-floating-card" id="roastCard" data-ts="{roast_ts}">
+            <div class="roast-floating-card" id="roastCard" data-ts="{roast_ts}" data-pinned="{str(always_show_roast).lower()}" data-clear-dismissed="{str(st.session_state.get('clear_dismissed_ts', False)).lower()}">
               <div class="roast-drag-handle" id="roastDragHandle" title="Drag to reposition card on screen">
                 <div style="display: flex; align-items: center; gap: 8px;">
                   <span style="font-size: 1.1em; color: #ff79c6; cursor: grab;" title="Drag handle">⠿</span>
@@ -998,8 +1023,14 @@ def render_live_telemetry_board(
                   return;
                 }
 
+                const clearDismissed = card.getAttribute("data-clear-dismissed") === "true";
+                if (clearDismissed) {
+                  pWin.sessionStorage.removeItem("roast_dismissed_ts");
+                }
+
+                const isPinned = card.getAttribute("data-pinned") === "true";
                 const currentTs = card.getAttribute("data-ts") || "";
-                if (currentTs && pWin.sessionStorage.getItem("roast_dismissed_ts") === currentTs) {
+                if (!isPinned && currentTs && pWin.sessionStorage.getItem("roast_dismissed_ts") === currentTs) {
                   card.remove();
                   return;
                 }
@@ -1091,24 +1122,23 @@ def render_live_telemetry_board(
                   if (!isDragging) return;
                   isDragging = false;
                   handle.style.cursor = "grab";
-                  card.style.cursor = "default";
-                  pDoc.body.style.userSelect = "";
+                  card.style.cursor = "auto";
+                  pDoc.body.style.userSelect = "auto";
 
-                  const rect = card.getBoundingClientRect();
                   pWin.sessionStorage.setItem("roast_card_pos", JSON.stringify({
-                    left: Math.round(rect.left),
-                    top: Math.round(rect.top)
+                    left: card.offsetLeft,
+                    top: card.offsetTop
                   }));
                 }
 
                 handle.onmousedown = function(e) {
-                  if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                  if (e.target === resetBtn || e.target === closeBtn) return;
                   e.preventDefault();
                   startDrag(e.clientX, e.clientY);
                 };
 
                 handle.ontouchstart = function(e) {
-                  if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+                  if (e.target === resetBtn || e.target === closeBtn) return;
                   if (e.touches.length === 1) {
                     startDrag(e.touches[0].clientX, e.touches[0].clientY);
                   }
@@ -1151,6 +1181,9 @@ def render_live_telemetry_board(
             })();
             </script>
             """, height=0, width=0)
+
+            if st.session_state.get("clear_dismissed_ts", False):
+                st.session_state["clear_dismissed_ts"] = False
 
         else:
             roast_hud_placeholder.empty()

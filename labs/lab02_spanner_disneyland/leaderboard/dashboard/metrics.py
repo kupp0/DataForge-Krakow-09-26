@@ -55,6 +55,16 @@ def _load_snapshot_from_cache() -> Optional[List[Dict[str, Any]]]:
         logging.warning(f"Could not load telemetry cache from disk: {e}")
     return None
 
+def clear_telemetry_cache() -> bool:
+    """Removes the on-disk telemetry cache file."""
+    try:
+        if os.path.exists(CACHE_FILE_PATH):
+            os.remove(CACHE_FILE_PATH)
+            return True
+    except Exception as e:
+        logging.warning(f"Could not remove telemetry cache file: {e}")
+    return False
+
 def find_projects_txt() -> str:
     """Finds projects.txt (or projects.example.txt) path dynamically by checking env or walking up parent directories."""
     env_path = os.environ.get("PROJECTS_TXT_PATH")
@@ -69,67 +79,11 @@ def find_projects_txt() -> str:
         cur = os.path.dirname(cur)
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../projects.txt"))
 
-def get_default_admin_project() -> str:
-    """Dynamically determines the admin project from env, active gcloud config, or projects.txt."""
-    if os.environ.get("ADMIN_PROJECT_ID"):
-        return os.environ["ADMIN_PROJECT_ID"].strip()
-    try:
-        res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True, timeout=3)
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
-    except Exception:
-        pass
-    pts = parse_projects_mapping(admin_project_id="")
-    if pts:
-        return pts[-1]["project_id"]
-    return ""
-
-PROJECTS_TXT_PATH = find_projects_txt()
-
-# Reusable client caches
-_MONITORING_CLIENT = None
-_SPANNER_CLIENTS: Dict[str, Any] = {}
-_AUTHED_SESSION = None
-
-def get_authorized_session():
-    global _AUTHED_SESSION
-    if _AUTHED_SESSION is None:
-        try:
-            import google.auth
-            from google.auth.transport.requests import AuthorizedSession
-            credentials, _ = google.auth.default()
-            _AUTHED_SESSION = AuthorizedSession(credentials)
-        except Exception as e:
-            logging.warning(f"Could not initialize AuthorizedSession for Cloud Run: {e}")
-            _AUTHED_SESSION = None
-    return _AUTHED_SESSION
-
-def get_monitoring_client():
-    global _MONITORING_CLIENT
-    if _MONITORING_CLIENT is None and monitoring_v3:
-        try:
-            _MONITORING_CLIENT = monitoring_v3.MetricServiceClient()
-        except Exception:
-            _MONITORING_CLIENT = None
-    return _MONITORING_CLIENT
-
-def get_spanner_client(project_id: str):
-    global _SPANNER_CLIENTS
-    if project_id not in _SPANNER_CLIENTS and spanner:
-        try:
-            _SPANNER_CLIENTS[project_id] = spanner.Client(project=project_id)
-        except Exception:
-            return None
-    return _SPANNER_CLIENTS.get(project_id)
-
 def parse_projects_mapping(admin_project_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Parses projects.txt and returns all participants, dynamically labeling admin as Facilitator.
     Format: PROJECT_ID, IAP_MEMBER, REGION, CITY
     """
-    if admin_project_id is None:
-        admin_project_id = get_default_admin_project()
-
     participants = []
     txt_path = find_projects_txt()
     if not os.path.exists(txt_path):
@@ -154,6 +108,104 @@ def parse_projects_mapping(admin_project_id: Optional[str] = None) -> List[Dict[
                     "is_facilitator": is_admin
                 })
     return participants
+
+def get_default_admin_project() -> str:
+    """Dynamically determines the admin project from env, active gcloud config, or projects.txt."""
+    if os.environ.get("ADMIN_PROJECT_ID"):
+        return os.environ["ADMIN_PROJECT_ID"].strip()
+    try:
+        res = subprocess.run(["gcloud", "config", "get-value", "project"], capture_output=True, text=True, timeout=3)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    pts = parse_projects_mapping()
+    if pts:
+        return pts[-1]["project_id"]
+    return ""
+
+PROJECTS_TXT_PATH = find_projects_txt()
+
+# Ensure default quota project environment variable is populated for any child calls
+_default_admin_p = get_default_admin_project()
+if _default_admin_p and "GOOGLE_CLOUD_QUOTA_PROJECT" not in os.environ:
+    os.environ["GOOGLE_CLOUD_QUOTA_PROJECT"] = _default_admin_p
+
+# Reusable client caches
+_SHARED_CREDENTIALS = None
+_MONITORING_CLIENT = None
+_SPANNER_CLIENTS: Dict[str, Any] = {}
+_AUTHED_SESSION = None
+
+def get_shared_credentials(admin_project_id: Optional[str] = None):
+    global _SHARED_CREDENTIALS
+    if _SHARED_CREDENTIALS is None:
+        try:
+            import google.auth
+            admin_proj = admin_project_id or get_default_admin_project()
+            creds, _ = google.auth.default(quota_project_id=admin_proj if admin_proj else None)
+            _SHARED_CREDENTIALS = creds
+        except Exception as e:
+            logging.warning(f"Could not load shared credentials with quota project: {e}")
+            _SHARED_CREDENTIALS = None
+    return _SHARED_CREDENTIALS
+
+def get_authorized_session(admin_project_id: Optional[str] = None):
+    global _AUTHED_SESSION
+    if _AUTHED_SESSION is None:
+        try:
+            from google.auth.transport.requests import AuthorizedSession
+            creds = get_shared_credentials(admin_project_id)
+            if creds:
+                _AUTHED_SESSION = AuthorizedSession(creds)
+            else:
+                import google.auth
+                creds, _ = google.auth.default()
+                _AUTHED_SESSION = AuthorizedSession(creds)
+        except Exception as e:
+            logging.warning(f"Could not initialize AuthorizedSession for Cloud Run: {e}")
+            _AUTHED_SESSION = None
+    return _AUTHED_SESSION
+
+def get_monitoring_client(admin_project_id: Optional[str] = None):
+    global _MONITORING_CLIENT
+    if _MONITORING_CLIENT is None and monitoring_v3:
+        try:
+            admin_proj = admin_project_id or get_default_admin_project()
+            creds = get_shared_credentials(admin_proj)
+            try:
+                from google.api_core.client_options import ClientOptions
+                opts = ClientOptions(quota_project_id=admin_proj) if admin_proj else None
+            except Exception:
+                opts = None
+            _MONITORING_CLIENT = monitoring_v3.MetricServiceClient(credentials=creds, client_options=opts)
+        except Exception as e:
+            logging.warning(f"Could not initialize MetricServiceClient with quota project: {e}")
+            try:
+                _MONITORING_CLIENT = monitoring_v3.MetricServiceClient()
+            except Exception:
+                _MONITORING_CLIENT = None
+    return _MONITORING_CLIENT
+
+def get_spanner_client(project_id: str, admin_project_id: Optional[str] = None):
+    global _SPANNER_CLIENTS
+    if project_id not in _SPANNER_CLIENTS and spanner:
+        try:
+            admin_proj = admin_project_id or get_default_admin_project()
+            creds = get_shared_credentials(admin_proj)
+            try:
+                from google.api_core.client_options import ClientOptions
+                opts = ClientOptions(quota_project_id=admin_proj) if admin_proj else None
+            except Exception:
+                opts = None
+            _SPANNER_CLIENTS[project_id] = spanner.Client(project=project_id, credentials=creds, client_options=opts)
+        except Exception as e:
+            logging.warning(f"Could not initialize Spanner client for {project_id} with quota project: {e}")
+            try:
+                _SPANNER_CLIENTS[project_id] = spanner.Client(project=project_id)
+            except Exception:
+                return None
+    return _SPANNER_CLIENTS.get(project_id)
 
 def fetch_participant_monitoring_metrics(
     project_id: str, 
@@ -702,17 +754,23 @@ class BackgroundTelemetryManager:
         self._trigger_event = threading.Event()
 
         # Background Roast Announcer State (0ms UI retrieval)
-        self.cached_roast: Dict[str, Any] = {
-            "target_city": "Kraków",
-            "emoji": "🏰",
-            "roast": "All parks are calibrating Spanner nodes and spinning up TrueTime engines!",
-            "rhyme": "Welcome to the Disneyland Spanner Grand Prix,\nLet's see whose database will set the magic free!",
-            "timestamp": time.strftime("%H:%M:%S"),
-            "model": "Gemini 3.8 Flash"
-        }
+        try:
+            import llm_announcer
+            self.cached_roast = llm_announcer.generate_dynamic_fallback_roast()
+        except Exception:
+            self.cached_roast = {
+                "target_city": "Tokyo",
+                "emoji": "🎢",
+                "roast": "Tokyo's Spanner nodes are running at lightning speed with TrueTime precision!",
+                "rhyme": "High speed queries lighting up the night,\nTokyo's database is setting records in flight!",
+                "timestamp": time.strftime("%H:%M:%S"),
+                "timestamp_epoch": time.time(),
+                "model": "Live AI Announcer"
+            }
         self.last_roast_time: float = 0.0
         self._roast_thread: Optional[threading.Thread] = None
         self._roast_lock = threading.Lock()
+        self._current_roast_snapshot: Optional[List[Dict[str, Any]]] = None
 
     @classmethod
     def get_instance(cls):
@@ -736,13 +794,33 @@ class BackgroundTelemetryManager:
                 name="SpannerTelemetryPoller"
             )
             self._thread.start()
+        # Trigger background roast generation asynchronously if never run
+        if self.last_roast_time == 0.0:
+            self.trigger_roast_sync()
+
+    def set_active_snapshot(self, snapshot_data: Optional[List[Dict[str, Any]]]):
+        """Updates the active dataset reference used for targeting roast commentary."""
+        if snapshot_data:
+            self._current_roast_snapshot = snapshot_data
 
     def trigger_immediate_sync(self):
         """Signals background worker to initiate a sync cycle immediately."""
         self._trigger_event.set()
 
-    def trigger_roast_sync(self):
+    def reset_and_clear_cache(self):
+        """Wipes both on-disk and in-memory cached telemetry and resets baselines."""
+        clear_telemetry_cache()
+        with self._lock:
+            self.cached_snapshot = create_initial_baseline_snapshot(self.admin_project_id)
+            self.cached_mock_snapshot = []
+            self.last_fetch_time = 0.0
+            self.last_error = None
+        self.trigger_immediate_sync()
+
+    def trigger_roast_sync(self, snapshot_data: Optional[List[Dict[str, Any]]] = None):
         """Asynchronously triggers a fresh roast generation via Gemini in the background without blocking."""
+        if snapshot_data:
+            self._current_roast_snapshot = snapshot_data
         with self._roast_lock:
             if self._roast_thread is None or not self._roast_thread.is_alive():
                 self._roast_thread = threading.Thread(
@@ -756,13 +834,44 @@ class BackgroundTelemetryManager:
         try:
             import llm_announcer
             target_proj = self.admin_project_id or get_default_admin_project()
-            snap = self.cached_snapshot if self.cached_snapshot else create_initial_baseline_snapshot(target_proj)
+            snap = self._current_roast_snapshot
+            if not snap:
+                if self.cached_snapshot and any(r.get("score", 0) > 0 or r.get("runs", 0) > 0 for r in self.cached_snapshot):
+                    snap = self.cached_snapshot
+                elif self.cached_mock_snapshot:
+                    snap = self.cached_mock_snapshot
+                elif self.cached_snapshot:
+                    snap = self.cached_snapshot
+                else:
+                    snap = create_initial_baseline_snapshot(target_proj)
             new_roast = llm_announcer.generate_roast_broadcast(snap, target_proj)
             if new_roast and isinstance(new_roast, dict) and "roast" in new_roast:
+                new_roast["timestamp_epoch"] = time.time()
                 self.cached_roast = new_roast
                 self.last_roast_time = time.time()
         except Exception as e:
             logging.error(f"Background roast worker error: {e}")
+
+    def generate_immediate_roast(self, snapshot_data: Optional[List[Dict[str, Any]]] = None, admin_project_id: Optional[str] = None) -> Dict[str, Any]:
+        """Synchronously drafts a fresh roast (e.g. on Roast Now click) and updates cache."""
+        import llm_announcer
+        target_proj = admin_project_id or self.admin_project_id or get_default_admin_project()
+        snap = snapshot_data or self._current_roast_snapshot
+        if not snap:
+            if self.cached_snapshot and any(r.get("score", 0) > 0 or r.get("runs", 0) > 0 for r in self.cached_snapshot):
+                snap = self.cached_snapshot
+            elif self.cached_mock_snapshot:
+                snap = self.cached_mock_snapshot
+            elif self.cached_snapshot:
+                snap = self.cached_snapshot
+            else:
+                snap = create_initial_baseline_snapshot(target_proj)
+        new_roast = llm_announcer.generate_roast_broadcast(snap, target_proj)
+        if new_roast and isinstance(new_roast, dict) and "roast" in new_roast:
+            new_roast["timestamp_epoch"] = time.time()
+            self.cached_roast = new_roast
+            self.last_roast_time = time.time()
+        return self.cached_roast
 
     def get_roast(self, admin_project_id: Optional[str] = None, force_refresh: bool = False) -> Dict[str, Any]:
         """Instant 0ms non-blocking retrieval of current roast bulletin."""
@@ -810,6 +919,8 @@ class BackgroundTelemetryManager:
         if use_mock:
             if not self.cached_mock_snapshot:
                 self.cached_mock_snapshot = get_leaderboard_snapshot(self.admin_project_id, use_mock=True)
+            if self.cached_mock_snapshot and not self._current_roast_snapshot:
+                self._current_roast_snapshot = self.cached_mock_snapshot
             return self.cached_mock_snapshot, {
                 "last_fetch_time": time.time(),
                 "age_seconds": 0,
@@ -822,6 +933,9 @@ class BackgroundTelemetryManager:
         if not self.cached_snapshot:
             disk_snap = _load_snapshot_from_cache()
             self.cached_snapshot = disk_snap if disk_snap else create_initial_baseline_snapshot(self.admin_project_id)
+
+        if self.cached_snapshot and not self._current_roast_snapshot:
+            self._current_roast_snapshot = self.cached_snapshot
 
         now = time.time()
         age = int(now - self.last_fetch_time) if self.last_fetch_time > 0 else 0

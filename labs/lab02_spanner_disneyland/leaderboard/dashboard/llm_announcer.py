@@ -6,6 +6,7 @@ mocking participant cities based on real-time leaderboard statistics.
 import os
 import json
 import time
+import datetime
 import random
 import urllib.request
 import urllib.error
@@ -14,40 +15,115 @@ from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_ROASTS = [
+ROAST_TEMPLATES = [
     {
-        "target_city": "London",
-        "emoji": "🌧️",
-        "roast": "London’s Spanner instance has lower throughput than the line for Peter Pan's Flight in a downpour.",
-        "rhyme": "Big Ben stopped ticking while your nodes fell asleep,\nWith zero transactions, even Mickey had to weep!"
+        "category": "general",
+        "emoji": "🎢",
+        "roast": "{city}'s park operations are an emotional rollercoaster of query spikes, latency, and glory.",
+        "rhyme": "Up and down the metrics go with twists around the bend,\nLet's see if {city} can make it to the winner's circle in the end!"
     },
     {
-        "target_city": "Tokyo",
+        "category": "high_cpu",
         "emoji": "🔥",
-        "roast": "Tokyo is redlining their CPU so hard that Space Mountain is legally classified as an active volcano.",
-        "rhyme": "Your queries are blazing, your CPU is pure heat,\nScale up your PUs or face catastrophic defeat!"
+        "roast": "{city}'s Spanner cluster is redlining so hot that Space Mountain is feeling the heat across the park.",
+        "rhyme": "Your queries are blazing and your nodes are running hot,\nCool down your cluster, {city}, give it everything you've got!"
     },
     {
-        "target_city": "Paris",
-        "emoji": "🥐",
-        "roast": "Paris is taking a 2-hour café break while their Spanner property graph remains completely unbuilt.",
-        "rhyme": "You ordered a croissant and forgot about your graph,\nNow the other twenty-four parks are having a good laugh!"
+        "category": "low_activity",
+        "emoji": "😴",
+        "roast": "{city} is taking a leisurely stroll down Main Street while the other parks race ahead.",
+        "rhyme": "The rides are empty and the queue has zero line,\nWake up {city}, it's database hackathon time!"
     },
     {
-        "target_city": "Berlin",
-        "emoji": "🎛️",
-        "roast": "Berlin spent forty minutes tuning their database schema to techno beats without inserting a single row.",
-        "rhyme": "The bass is pumping loud but the table has no data,\nYou can party at Berghain, but you'll fail the hackathon later!"
+        "category": "leader",
+        "emoji": "🏰",
+        "roast": "{city} is minting Disney dollars faster than Scrooge McDuck can swim through them.",
+        "rhyme": "Your throughput is soaring and your profits break the bank,\nKeep on pushing {city}, hold onto that top rank!"
     },
     {
-        "target_city": "Sydney",
-        "emoji": "🦘",
-        "roast": "Sydney's throughput is bouncing like a startled kangaroo, but their error rate is doing triple flips.",
-        "rhyme": "Down under you're pushing ten thousand requests a minute,\nToo bad half of your transactions don't have any rows in it!"
+        "category": "no_graph",
+        "emoji": "🗺️",
+        "roast": "{city}'s park visitors are wandering Fantasyland in circles because the Property Graph is still missing.",
+        "rhyme": "You need nodes and edges to show visitors the way,\nBuild out your graph, {city}, and save the park today!"
+    },
+    {
+        "category": "schema_tuning",
+        "emoji": "�️",
+        "roast": "{city} spent the last thirty minutes fine-tuning database schemas without recording a single ticket sale.",
+        "rhyme": "The schema looks pretty and the indexes are aligned,\nNow push some transactions, {city}, don't get left behind!"
+    },
+    {
+        "category": "throughput",
+        "emoji": "⚡",
+        "roast": "{city} is pushing transactions with such frantic energy that the park's backup generators kicked in.",
+        "rhyme": "The throughput is humming and the lights begin to shake,\n{city} is determined to take the biggest piece of cake!"
     }
 ]
 
-from metrics import get_default_admin_project
+from metrics import get_default_admin_project, parse_projects_mapping
+
+def generate_dynamic_fallback_roast(leaderboard_data: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Generates a dynamic fallback roast by picking an actual participant city from
+    the real-time leaderboard or projects mapping, tailoring the joke to their actual status.
+    Guarantees no hardcoded event cities!
+    """
+    target_city = "The Contenders"
+    chosen_participant: Optional[Dict[str, Any]] = None
+
+    # 1. Try to pick from real active leaderboard participants
+    if leaderboard_data:
+        valid_participants = [p for p in leaderboard_data if p.get("city")]
+        if valid_participants:
+            chosen_participant = random.choice(valid_participants)
+            target_city = chosen_participant.get("city", target_city)
+    
+    # 2. If no leaderboard data, look up projects mapping dynamically
+    if target_city == "The Contenders":
+        try:
+            mapped = parse_projects_mapping()
+            if mapped:
+                chosen_p = random.choice(mapped)
+                target_city = chosen_p.get("city", target_city)
+        except Exception:
+            pass
+
+    # Clean any facilitator suffix for a natural roast headline
+    clean_city = target_city.replace(" (Facilitator)", "").strip()
+
+    # 3. Match template based on participant metrics if available
+    selected_template = None
+    if chosen_participant:
+        cpu = chosen_participant.get("cpu_utilization_pct", 0)
+        score = chosen_participant.get("score", 0)
+        runs = chosen_participant.get("runs", 0)
+        has_graph = chosen_participant.get("has_graph", False)
+
+        if cpu > 60:
+            selected_template = next(t for t in ROAST_TEMPLATES if t["category"] == "high_cpu")
+        elif runs == 0 and score == 0:
+            selected_template = random.choice([
+                next(t for t in ROAST_TEMPLATES if t["category"] == "low_activity"),
+                next(t for t in ROAST_TEMPLATES if t["category"] == "schema_tuning")
+            ])
+        elif score > 500:
+            selected_template = next(t for t in ROAST_TEMPLATES if t["category"] == "leader")
+        elif not has_graph:
+            selected_template = next(t for t in ROAST_TEMPLATES if t["category"] == "no_graph")
+
+    if not selected_template:
+        selected_template = random.choice(ROAST_TEMPLATES)
+
+    now = datetime.datetime.now()
+    return {
+        "target_city": clean_city,
+        "emoji": selected_template["emoji"],
+        "roast": selected_template["roast"].format(city=clean_city),
+        "rhyme": selected_template["rhyme"].format(city=clean_city),
+        "timestamp": now.strftime("%H:%M:%S"),
+        "timestamp_epoch": time.time(),
+        "model": "Dynamic Roaster (Fallback)"
+    }
 
 def generate_roast_broadcast(
     leaderboard_data: List[Dict[str, Any]], 
@@ -63,8 +139,8 @@ def generate_roast_broadcast(
     now_str = time.strftime("%H:%M:%S")
     
     if not leaderboard_data:
-        fallback = random.choice(FALLBACK_ROASTS)
-        fallback.update({"timestamp": now_str, "model": "Offline Fallback"})
+        fallback = generate_dynamic_fallback_roast(leaderboard_data)
+        fallback.update({"timestamp": now_str, "model": "Dynamic Roaster (Offline)"})
         return fallback
 
     # Compress participant data for prompt context
@@ -113,10 +189,14 @@ Respond ONLY with valid JSON in this exact structure:
         from google.auth.transport.requests import Request
         import re
 
-        creds, proj = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        target_project = admin_project_id or os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT") or os.environ.get("ADMIN_PROJECT_ID")
+        creds, proj = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            quota_project_id=target_project if target_project else None
+        )
         creds.refresh(Request())
         token = creds.token
-        target_project = proj or admin_project_id
+        target_project = target_project or proj
 
         url = f"https://aiplatform.googleapis.com/v1/projects/{target_project}/locations/global/publishers/google/models/{model}:generateContent"
         
@@ -179,15 +259,17 @@ Respond ONLY with valid JSON in this exact structure:
                 rhyme = "\n".join(parsed.get("rhyme_lines", [])) if "rhyme_lines" in parsed else parsed.get("rhyme", "")
                 parsed["rhyme"] = rhyme
                 parsed["timestamp"] = now_str
+                parsed["timestamp_epoch"] = time.time()
                 parsed["model"] = "Gemini 3.8 Flash"
                 return parsed
 
     except Exception as e:
         logger.warning(f"LLM roast generation fallback: {e}")
 
-    # Fallback to rich random selection
-    fallback = dict(random.choice(FALLBACK_ROASTS))
+    # Fallback to rich dynamic selection
+    fallback = generate_dynamic_fallback_roast(leaderboard_data)
     fallback["timestamp"] = now_str
+    fallback["timestamp_epoch"] = time.time()
     fallback["model"] = "Dynamic Roaster (Fallback)"
     return fallback
 
