@@ -1,8 +1,0 @@
-# ==============================================================================
-# Event Participant Project Mapping
-# Format: PROJECT_ID, IAP_MEMBER, REGION, CITY
-#
-# Examples:
-#   my-hackathon-project-01, user:participant01@gcplab.me, europe-west3, Tokyo
-#   my-hackathon-project-02, user:participant02@gcplab.me, europe-west3, Paris
-# ==============================================================================

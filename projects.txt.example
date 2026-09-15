@@ -1,8 +1,17 @@
 # ==============================================================================
-# Event Participant Project Mapping
+# Event Participant Project Mapping (Template)
 # Format: PROJECT_ID, IAP_MEMBER, REGION, CITY
 #
-# Examples:
+# Instructions:
+#   Copy this file to `projects.txt` and fill in your actual event sandbox
+#   details. `projects.txt` is git-ignored to prevent leaking participant
+#   credentials.
+#
+#     cp projects.txt.example projects.txt
+#
+# Examples (keep these commented out; uncommented rows are parsed as real
+# participants by deploy.py and the leaderboard dashboard):
 #   my-hackathon-project-01, user:participant01@gcplab.me, europe-west3, Tokyo
-#   my-hackathon-project-02, user:participant02@gcplab.me, europe-west3, Paris
+#   my-hackathon-project-02, user:participant02@gcplab.me, europe-west3, London
+#   my-hackathon-project-03, user:participant03@gcplab.me, europe-west3, Paris
 # ==============================================================================

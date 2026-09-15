@@ -66,13 +66,13 @@ def clear_telemetry_cache() -> bool:
     return False
 
 def find_projects_txt() -> str:
-    """Finds projects.txt (or projects.example.txt) path dynamically by checking env or walking up parent directories."""
+    """Finds projects.txt (or projects.txt.example) path dynamically by checking env or walking up parent directories."""
     env_path = os.environ.get("PROJECTS_TXT_PATH")
     if env_path and os.path.exists(env_path):
         return env_path
     cur = os.path.dirname(os.path.abspath(__file__))
     for _ in range(6):
-        for candidate_name in ["projects.txt", "projects.example.txt", "projects.txt.example"]:
+        for candidate_name in ["projects.txt", "projects.txt.example"]:
             candidate = os.path.join(cur, candidate_name)
             if os.path.exists(candidate):
                 return candidate
