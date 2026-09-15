@@ -73,7 +73,7 @@ def classify_error(error_text):
             "Application Default Credentials (ADC) token missing, expired, or restricted.",
             "Run: gcloud auth application-default login"
         )
-    if any(kw in err for kw in ["not found", "not_found", "does not exist", "404", "cannot find project"]):
+    if any(kw in err for kw in ["project not found", "project does not exist", "cannot find project", "project_not_found"]) or ("not found" in err and "project" in err and "service account" not in err):
         return (
             "PROJECT_NOT_FOUND",
             "Bad Project ID",
@@ -330,7 +330,7 @@ def prepare_single_project(project):
     
     try:
         # 1. Enable Required Core APIs
-        for api in ["compute.googleapis.com", "cloudresourcemanager.googleapis.com"]:
+        for api in ["compute.googleapis.com", "cloudresourcemanager.googleapis.com", "spanner.googleapis.com"]:
             logging.info(f"[{project_id}] Enabling API: {api}")
             cmd = ["gcloud", "services", "enable", api, f"--project={project_id}"]
             for attempt in range(4):
@@ -344,6 +344,11 @@ def prepare_single_project(project):
                     continue
                 cat, badge, desc, fix = classify_error(res.stderr)
                 raise Exception(f"Failed to enable API {api} [{badge}]: {res.stderr.strip()}")
+
+        # 1b. Ensure Spanner Service Identity exists before Terraform IAM assignment
+        logging.info(f"[{project_id}] Ensuring Cloud Spanner service identity exists...")
+        spanner_ident_cmd = ["gcloud", "beta", "services", "identity", "create", "--service=spanner.googleapis.com", f"--project={project_id}"]
+        subprocess.run(spanner_ident_cmd, capture_output=True, text=True)
                 
         # 2. Get Project Number (cached if already probed)
         project_number = project.get("project_number")
@@ -505,7 +510,10 @@ def run_local_terraform_apply(project, builds, index):
         for item in ["00-core-infra", "labs", "main.tf", "variables.tf", "terraform.tfvars", "bootstrapping.sh", "event-manifest.json", ".terraform.lock.hcl"]:
             if os.path.exists(item):
                 if os.path.isdir(item):
-                    shutil.copytree(item, os.path.join(workdir, item))
+                    shutil.copytree(
+                        item, os.path.join(workdir, item),
+                        ignore=shutil.ignore_patterns(".venv", "venv", "__pycache__", ".terraform", "leaderboard", "admin_leaderboard", ".agents")
+                    )
                 else:
                     shutil.copy(item, os.path.join(workdir, item))
                     
@@ -641,7 +649,10 @@ def run_local_terraform_destroy(project, builds, index):
         for item in ["00-core-infra", "labs", "main.tf", "variables.tf", "terraform.tfvars", "bootstrapping.sh", "event-manifest.json", ".terraform.lock.hcl"]:
             if os.path.exists(item):
                 if os.path.isdir(item):
-                    shutil.copytree(item, os.path.join(workdir, item), dirs_exist_ok=True)
+                    shutil.copytree(
+                        item, os.path.join(workdir, item), dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".venv", "venv", "__pycache__", ".terraform", "leaderboard", "admin_leaderboard", ".agents")
+                    )
                 else:
                     shutil.copy(item, os.path.join(workdir, item))
                     
