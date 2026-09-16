@@ -8,6 +8,7 @@ import os
 import datetime
 import time
 import logging
+import threading
 from typing import Dict, List, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,6 +31,32 @@ import json
 
 CACHE_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".telemetry_cache.json")
 
+# Fields persisted as ISO-8601 strings that MUST be restored to datetime objects
+# on load. Leaving them as strings makes them compare against freshly-fetched
+# datetimes (metrics.py fetch paths), raising
+#   TypeError: '<' not supported between instances of 'str' and 'datetime.datetime'
+# which aborts the entire poll cycle for all participants.
+_TIMESTAMP_FIELDS = ("first_run_timestamp", "cloud_run_create_time")
+
+# Width of the commit-timestamp bucket used to measure peak sustained write
+# throughput. Wide enough to smooth out a single fast transaction (which would
+# otherwise read as an implausible instantaneous rate), narrow enough that a
+# genuine 60-second load test still registers its plateau rather than being
+# averaged away against idle time.
+QPS_BUCKET_SEC = 10
+
+# Lookback for the *scored* Spanner CPU utilisation metric, in minutes. The
+# value reported is the peak over this window ("highest CPU you reached"),
+# which is stable regardless of when the closing ceremony actually starts.
+CPU_LOOKBACK_MIN = 90
+
+# Gates for the optional vector-embedding bonus. Coverage stops a token single
+# embedded row from counting; distinct-vector count stops the identical
+# zero-vector cheat, which otherwise satisfies IS NOT NULL for free.
+EMBEDDING_MIN_COVERAGE = 0.8
+EMBEDDING_MIN_DISTINCT = 5
+
+
 def _save_snapshot_to_cache(snapshot: List[Dict[str, Any]]) -> None:
     try:
         def serialize_item(obj):
@@ -39,10 +66,34 @@ def _save_snapshot_to_cache(snapshot: List[Dict[str, Any]]) -> None:
                 return obj.timestamp()
             return str(obj)
 
-        with open(CACHE_FILE_PATH, "w") as f:
+        # Write to a sibling temp file then atomically rename, so a concurrent
+        # reader never observes a half-written (truncated) cache file.
+        tmp_path = f"{CACHE_FILE_PATH}.tmp"
+        with open(tmp_path, "w") as f:
             json.dump(snapshot, f, default=serialize_item, indent=2)
+        os.replace(tmp_path, CACHE_FILE_PATH)
     except Exception as e:
         logging.warning(f"Could not save telemetry cache to disk: {e}")
+
+
+def _rehydrate_timestamps(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Converts persisted ISO-8601 timestamp strings back into datetime objects."""
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        for key in _TIMESTAMP_FIELDS:
+            val = rec.get(key)
+            if isinstance(val, str) and val:
+                try:
+                    rec[key] = datetime.datetime.fromisoformat(val)
+                except ValueError:
+                    logging.warning(
+                        f"Unparseable cached timestamp {key}={val!r} for "
+                        f"{rec.get('project_id')}; dropping it."
+                    )
+                    rec[key] = None
+    return records
+
 
 def _load_snapshot_from_cache() -> Optional[List[Dict[str, Any]]]:
     try:
@@ -50,10 +101,11 @@ def _load_snapshot_from_cache() -> Optional[List[Dict[str, Any]]]:
             with open(CACHE_FILE_PATH, "r") as f:
                 data = json.load(f)
                 if isinstance(data, list) and len(data) > 0:
-                    return data
+                    return _rehydrate_timestamps(data)
     except Exception as e:
         logging.warning(f"Could not load telemetry cache from disk: {e}")
     return None
+
 
 def clear_telemetry_cache() -> bool:
     """Removes the on-disk telemetry cache file."""
@@ -135,6 +187,15 @@ if _default_admin_p and "GOOGLE_CLOUD_QUOTA_PROJECT" not in os.environ:
 _SHARED_CREDENTIALS = None
 _MONITORING_CLIENT = None
 _SPANNER_CLIENTS: Dict[str, Any] = {}
+# Polling queries are bounded so a single unresponsive project cannot block a
+# worker indefinitely. ThreadPoolExecutor's context manager waits for every
+# future, so one hang would otherwise freeze the entire board for good.
+SPANNER_QUERY_TIMEOUT_SEC = 20
+# Instance/Database objects own gRPC channels, so they are cached per project
+# rather than rebuilt each poll cycle. See get_spanner_database().
+_SPANNER_INSTANCES: Dict[str, Any] = {}
+_SPANNER_DATABASES: Dict[str, Any] = {}
+_SPANNER_DB_LOCK = threading.Lock()
 _AUTHED_SESSION = None
 
 def get_shared_credentials(admin_project_id: Optional[str] = None):
@@ -150,6 +211,41 @@ def get_shared_credentials(admin_project_id: Optional[str] = None):
             _SHARED_CREDENTIALS = None
     return _SHARED_CREDENTIALS
 
+def _size_session_pool(session):
+    """Sizes the connection pool to match the poller's thread count.
+
+    get_leaderboard_snapshot fans out to ThreadPoolExecutor(max_workers=25) and
+    every worker shares this one session. urllib3's default pool_maxsize=10 meant
+    the excess connections were discarded and re-established on every cycle,
+    logging 'Connection pool is full, discarding connection: run.googleapis.com'
+    hundreds of times and paying a needless TLS handshake each time.
+
+    AuthorizedSession also owns a *second*, internal requests.Session
+    (_auth_request_session) used only for token refresh against
+    oauth2.googleapis.com. On a cold start all 25 workers see an unrefreshed
+    credential at once and stampede that session, so it needs the same
+    treatment. Its stock adapter is HTTPAdapter(max_retries=3); that retry
+    behaviour is preserved deliberately, since a failed token refresh fails
+    every downstream call.
+    """
+    try:
+        from requests.adapters import HTTPAdapter
+        adapter = HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=0)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        auth_session = getattr(session, "_auth_request_session", None)
+        if auth_session is not None:
+            auth_session.mount(
+                "https://",
+                HTTPAdapter(pool_connections=32, pool_maxsize=32, max_retries=3),
+            )
+    except Exception as e:
+        logging.warning(f"Could not resize HTTP connection pool: {e}")
+    return session
+
+
+
 def get_authorized_session(admin_project_id: Optional[str] = None):
     global _AUTHED_SESSION
     if _AUTHED_SESSION is None:
@@ -157,14 +253,15 @@ def get_authorized_session(admin_project_id: Optional[str] = None):
             from google.auth.transport.requests import AuthorizedSession
             creds = get_shared_credentials(admin_project_id)
             if creds:
-                _AUTHED_SESSION = AuthorizedSession(creds)
+                _AUTHED_SESSION = _size_session_pool(AuthorizedSession(creds))
             else:
                 import google.auth
                 creds, _ = google.auth.default()
-                _AUTHED_SESSION = AuthorizedSession(creds)
+                _AUTHED_SESSION = _size_session_pool(AuthorizedSession(creds))
         except Exception as e:
             logging.warning(f"Could not initialize AuthorizedSession for Cloud Run: {e}")
             _AUTHED_SESSION = None
+
     return _AUTHED_SESSION
 
 def get_monitoring_client(admin_project_id: Optional[str] = None):
@@ -207,13 +304,47 @@ def get_spanner_client(project_id: str, admin_project_id: Optional[str] = None):
                 return None
     return _SPANNER_CLIENTS.get(project_id)
 
+
+def get_spanner_database(project_id: str, client: Any):
+    """Return a cached (Instance, Database) pair for a project.
+
+    Building a fresh Database every poll cycle is not free: `Database.spanner_api`
+    lazily constructs a gRPC channel, and nothing ever closes the discarded one.
+    Across 25 projects that leaked roughly 50 threads and 50 file descriptors per
+    cycle, which compounds over a multi-hour event.
+
+    The 25 poll workers run concurrently, so the cache is built under a lock to
+    avoid two threads racing and each creating a channel for the same project.
+    """
+    db = _SPANNER_DATABASES.get(project_id)
+    if db is not None:
+        return _SPANNER_INSTANCES[project_id], db
+
+    with _SPANNER_DB_LOCK:
+        # Re-check inside the lock; another thread may have won the race.
+        db = _SPANNER_DATABASES.get(project_id)
+        if db is None:
+            inst = client.instance("disneyland")
+            _SPANNER_INSTANCES[project_id] = inst
+            _SPANNER_DATABASES[project_id] = inst.database("agent-lab")
+    return _SPANNER_INSTANCES[project_id], _SPANNER_DATABASES[project_id]
+
 def fetch_participant_monitoring_metrics(
     project_id: str, 
     interval: Any,
-    client: Optional[Any] = None
+    client: Optional[Any] = None,
+    cpu_interval: Optional[Any] = None
 ) -> Dict[str, float]:
     """
     Fetches CPU utilization (%) and Storage (MB) using the shared monitoring client.
+
+    CPU uses its own, wider lookback (`cpu_interval`) because it is scored, not
+    merely displayed: peak CPU drives both `scaling_score` and the Round 4
+    efficiency audit. On the 15-minute storage window a park that ran its load
+    test 16 minutes before the ceremony read as completely idle and was graded
+    as wasted capacity, which made the award depend on ceremony start time
+    rather than on anything the participant did. Storage keeps the short window
+    since only its most recent point is used.
     """
     if not client:
         return {"cpu_utilization_pct": 0.0, "storage_mb": 0.0}
@@ -232,7 +363,7 @@ def fetch_participant_monitoring_metrics(
             request={
                 "name": project_name,
                 "filter": filter_cpu,
-                "interval": interval,
+                "interval": cpu_interval or interval,
                 "view": monitoring_v3.ListTimeSeriesRequest.TimeSeriesView.FULL
             }
         )
@@ -368,6 +499,8 @@ def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[D
     processing_units = 100
     qps = 0.0
     first_run_timestamp = None
+    has_embeddings = False
+    embedded_count = 0
 
     client = get_spanner_client(project_id)
     if not client:
@@ -380,7 +513,9 @@ def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[D
                 "ticket_price": fallback_prev.get("ticket_price", 0.0),
                 "processing_units": fallback_prev.get("processing_units", 100),
                 "qps": fallback_prev.get("qps", 0.0),
-                "first_run_timestamp": fallback_prev.get("first_run_timestamp")
+                "first_run_timestamp": fallback_prev.get("first_run_timestamp"),
+                "has_embeddings": fallback_prev.get("has_embeddings", False),
+                "embedded_count": fallback_prev.get("embedded_count", 0)
             }
         return {
             "tables": tables,
@@ -390,27 +525,33 @@ def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[D
             "ticket_price": ticket_price,
             "processing_units": processing_units,
             "qps": qps,
-            "first_run_timestamp": first_run_timestamp
+            "first_run_timestamp": first_run_timestamp,
+            "has_embeddings": has_embeddings,
+            "embedded_count": embedded_count
         }
 
     try:
-        inst = client.instance("disneyland")
+        # Reuse the cached Instance/Database. Constructing a new Database each
+        # cycle opens a fresh gRPC channel (Database.spanner_api is lazy) that
+        # is never closed, leaking ~2 threads and ~2 fds per project per poll.
+        inst, db = get_spanner_database(project_id, client)
         try:
             inst.reload()
             processing_units = inst.processing_units or 100
         except Exception:
             processing_units = 100
 
-        db = inst.database("agent-lab")
         with db.snapshot(multi_use=True) as s:
             # 1. Query tables
             tables = [r[0] for r in s.execute_sql(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = ''"
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = ''",
+                timeout=SPANNER_QUERY_TIMEOUT_SEC
             )]
             
             # 2. Query property graph
             graphs = [r[0] for r in s.execute_sql(
-                "SELECT property_graph_name FROM information_schema.property_graphs"
+                "SELECT property_graph_name FROM information_schema.property_graphs",
+                timeout=SPANNER_QUERY_TIMEOUT_SEC
             )]
             has_graph = len(graphs) > 0
 
@@ -418,30 +559,113 @@ def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[D
             for t in tables:
                 t_lower = t.lower()
                 if t_lower in ["disneylandpark", "attraction", "path"]:
-                    for r in s.execute_sql(f"SELECT COUNT(1) FROM {t}"):
+                    for r in s.execute_sql(f"SELECT COUNT(1) FROM {t}", timeout=SPANNER_QUERY_TIMEOUT_SEC):
                         total_rows += r[0]
                 elif "attractionrun" in t_lower or "parkrun" in t_lower or "rideexecution" in t_lower:
-                    sql_runs = f"""
-                    SELECT 
-                      COUNT(1), 
-                      AVG(TicketPrice),
-                      TIMESTAMP_DIFF(MAX(RunTimestamp), MIN(RunTimestamp), SECOND),
-                      COUNTIF(RunTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE)),
-                      MIN(RunTimestamp)
-                    FROM {t}
+                    # Substring match, so participant-invented tables such as
+                    # "AttractionRunSensors" or "ParkRunArchive" land here too.
+                    # Those may lack TicketPrice/RunTimestamp, and an error would
+                    # otherwise escape to the outer handler and wipe this park's
+                    # whole record. Isolate it, and keep the richest match rather
+                    # than whichever table information_schema happened to return
+                    # last.
+                    try:
+                        sql_runs = f"""
+                        SELECT 
+                          COUNT(1), 
+                          AVG(TicketPrice),
+                          COUNTIF(RunTimestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 MINUTE)),
+                          MIN(RunTimestamp)
+                        FROM {t}
+                        """
+                        t_runs, t_price, t_recent, t_first = 0, 0.0, 0, None
+                        for r in s.execute_sql(sql_runs, timeout=SPANNER_QUERY_TIMEOUT_SEC):
+                            t_runs = r[0] or 0
+                            t_price = float(r[1]) if r[1] is not None else 0.0
+                            t_recent = r[2] or 0
+                            t_first = r[3]
+
+                        # Peak sustained write throughput = busiest commit-timestamp bucket.
+                        #
+                        # This replaces `runs / TIMESTAMP_DIFF(MAX, MIN, SECOND)`, which was
+                        # broken in two ways, both observed in rehearsal:
+                        #   * TIMESTAMP_DIFF truncates to whole seconds, so a seed load that
+                        #     landed inside one second reported duration_sec = 0 and fell
+                        #     through to `float(runs)` - 2250 rows became "2250 runs/sec",
+                        #     which maxed throughput_score, handed out a free Throughput
+                        #     Titan badge, and made the Round 4 audit skip the park entirely.
+                        #   * A lifetime average keeps growing its own denominator, so
+                        #     returning later to add more data *lowered* your throughput.
+                        # Bucketing bounds the answer at (rows in one bucket / bucket width)
+                        # and reports a rate Spanner genuinely sustained.
+                        peak_rows_in_bucket = 0
+                        if t_runs > 0:
+                            sql_peak = f"""
+                            SELECT MAX(bucket_rows) FROM (
+                              SELECT COUNT(1) AS bucket_rows
+                              FROM {t}
+                              GROUP BY DIV(UNIX_SECONDS(RunTimestamp), {QPS_BUCKET_SEC})
+                            ) AS buckets
+                            """
+                            for r in s.execute_sql(sql_peak, timeout=SPANNER_QUERY_TIMEOUT_SEC):
+                                peak_rows_in_bucket = r[0] or 0
+
+                        peak_qps = peak_rows_in_bucket / float(QPS_BUCKET_SEC)
+                        live_qps = t_recent / 120.0
+                        t_qps = round(max(peak_qps, live_qps), 1)
+
+                        if t_runs >= runs:
+                            runs = t_runs
+                            ticket_price = t_price
+                            first_run_timestamp = t_first
+                            qps = t_qps
+                    except Exception as e:
+                        logging.warning(
+                            f"Run-table probe skipped for {project_id}.{t}: "
+                            f"{type(e).__name__}: {e}"
+                        )
+
+            # --- Optional stretch goal: populated vector embeddings ---
+            #
+            # Deliberately in its own try/except. The enclosing handler is a
+            # bare `except Exception` that falls back to cached or zeroed data
+            # for the *entire* participant, so an error here (schema altered,
+            # column dropped, type mismatch) would silently wipe that park's
+            # tables, rows and graph from the board rather than just skipping
+            # the bonus.
+            #
+            # `distinct_first` defeats the obvious cheat: writing one identical
+            # zero vector to every row satisfies IS NOT NULL with no ML work at
+            # all. Measured - zero-vector cheat gives distinct_first = 1,
+            # genuine per-row embeddings give distinct_first = row count.
+            if any(t.lower() == "attraction" for t in tables):
+                try:
+                    sql_emb = """
+                    SELECT
+                      COUNT(1),
+                      COUNTIF(Embedding IS NOT NULL),
+                      COUNT(DISTINCT CAST(Embedding[SAFE_OFFSET(0)] AS STRING))
+                    FROM Attraction
                     """
-                    for r in s.execute_sql(sql_runs):
-                        runs = r[0] or 0
-                        ticket_price = float(r[1]) if r[1] is not None else 0.0
-                        duration_sec = r[2] or 0
-                        recent_runs = r[3] or 0
-                        first_run_timestamp = r[4]
-                        
-                        burst_qps = (runs / max(1, duration_sec)) if duration_sec > 0 and runs > 1 else (float(runs) if runs > 0 and duration_sec == 0 else 0.0)
-                        live_qps = recent_runs / 120.0
-                        qps = round(max(burst_qps, live_qps), 1)
-    except Exception:
-        # Database might not exist yet or instance not provisioned
+                    for r in s.execute_sql(sql_emb, timeout=SPANNER_QUERY_TIMEOUT_SEC):
+                        total_attr = r[0] or 0
+                        embedded_count = r[1] or 0
+                        distinct_first = r[2] or 0
+                    if total_attr > 0:
+                        coverage = embedded_count / float(total_attr)
+                        has_embeddings = (
+                            coverage >= EMBEDDING_MIN_COVERAGE
+                            and distinct_first >= EMBEDDING_MIN_DISTINCT
+                        )
+                except Exception as e:
+                    logging.debug(f"Embedding probe skipped for {project_id}: {e}")
+    except Exception as e:
+        # Database might not exist yet, instance not provisioned, or a
+        # transient blip mid-query. Log it: this used to fail silently, which
+        # made a wrong board indistinguishable from an empty one.
+        logging.warning(
+            f"Spanner probe failed for {project_id}: {type(e).__name__}: {e}"
+        )
         if fallback_prev and (len(fallback_prev.get("tables", [])) > 0 or fallback_prev.get("runs", 0) > 0):
             return {
                 "tables": fallback_prev.get("tables", []),
@@ -451,8 +675,18 @@ def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[D
                 "ticket_price": fallback_prev.get("ticket_price", 0.0),
                 "processing_units": fallback_prev.get("processing_units", 100),
                 "qps": fallback_prev.get("qps", 0.0),
-                "first_run_timestamp": fallback_prev.get("first_run_timestamp")
+                "first_run_timestamp": fallback_prev.get("first_run_timestamp"),
+                "has_embeddings": fallback_prev.get("has_embeddings", False),
+                "embedded_count": fallback_prev.get("embedded_count", 0)
             }
+        # No trustworthy history. Return explicit zeros rather than whatever
+        # locals happened to be populated before the exception fired.
+        return {
+            "tables": [], "total_rows": 0, "has_graph": False, "runs": 0,
+            "ticket_price": 0.0, "processing_units": processing_units or 100,
+            "qps": 0.0, "first_run_timestamp": None,
+            "has_embeddings": False, "embedded_count": 0
+        }
 
     return {
         "tables": tables,
@@ -462,7 +696,9 @@ def fetch_participant_spanner_details(project_id: str, fallback_prev: Optional[D
         "ticket_price": ticket_price,
         "processing_units": processing_units,
         "qps": qps,
-        "first_run_timestamp": first_run_timestamp
+        "first_run_timestamp": first_run_timestamp,
+        "has_embeddings": has_embeddings,
+        "embedded_count": embedded_count
     }
 
 def run_spanner_dml(project_id: str, query: str, params: Optional[dict] = None) -> tuple[bool, str, int]:
@@ -474,8 +710,7 @@ def run_spanner_dml(project_id: str, query: str, params: Optional[dict] = None) 
     if not client:
         return False, "Spanner client unavailable", 0
     try:
-        inst = client.instance("disneyland")
-        db = inst.database("agent-lab")
+        _inst, db = get_spanner_database(project_id, client)
         try:
             def tx_dml(tx):
                 return tx.execute_update(query, params=params or {})
@@ -568,6 +803,8 @@ def get_leaderboard_snapshot(
                 "runs": runs,
                 "processing_units": mock_pu,
                 "qps": mock_qps,
+                "has_embeddings": False,
+                "embedded_count": 0,
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
@@ -590,6 +827,15 @@ def get_leaderboard_snapshot(
             "start_time": {"seconds": int(start_time.timestamp())}
         }) if monitoring_v3 else None
 
+        # Peak CPU is scored, so it needs a lookback that covers the working
+        # session rather than just the last few poll cycles. See
+        # fetch_participant_monitoring_metrics for why.
+        cpu_start = now - datetime.timedelta(minutes=CPU_LOOKBACK_MIN)
+        cpu_interval = monitoring_v3.TimeInterval({
+            "end_time": {"seconds": int(now.timestamp())},
+            "start_time": {"seconds": int(cpu_start.timestamp())}
+        }) if monitoring_v3 else None
+
         # Parallel worker per project
         def process_participant(p):
             proj_id = p["project_id"]
@@ -599,7 +845,7 @@ def get_leaderboard_snapshot(
             spanner_data = fetch_participant_spanner_details(proj_id, fallback_prev=prev_data)
             
             # 2. Monitoring metrics
-            mon_metrics = fetch_participant_monitoring_metrics(proj_id, interval, mon_client)
+            mon_metrics = fetch_participant_monitoring_metrics(proj_id, interval, mon_client, cpu_interval)
 
             # 3. Cloud Run inspection
             cr_data = fetch_participant_cloud_run(proj_id, session=auth_session, fallback_prev=prev_data)
@@ -630,6 +876,8 @@ def get_leaderboard_snapshot(
                 "runs": spanner_data["runs"],
                 "processing_units": spanner_data["processing_units"],
                 "qps": spanner_data["qps"],
+                "has_embeddings": spanner_data.get("has_embeddings", False),
+                "embedded_count": spanner_data.get("embedded_count", 0),
                 "visitors": biz["effective_visitors"],
                 "revenue": biz["revenue"],
                 "profit": biz["profit"],
@@ -641,8 +889,46 @@ def get_leaderboard_snapshot(
                 "is_facilitator": p.get("is_facilitator", False)
             }
 
+        def safe_process(p):
+            """Never raise: one bad project must not discard the other 24.
+
+            executor.map() re-raises on iteration, so a single transient
+            failure (a team mid-DDL, an instance mid-rescale) used to throw
+            away the entire cycle and freeze the board on stale data.
+            """
+            try:
+                return process_participant(p)
+            except Exception as e:
+                proj_id = p["project_id"]
+                logging.error(
+                    f"Telemetry failed for {proj_id} ({p.get('city')}): "
+                    f"{type(e).__name__}: {e}"
+                )
+                prev = prev_by_pid.get(proj_id)
+                if prev:
+                    # Carry the last good record forward, flagged as stale.
+                    carried = dict(prev)
+                    carried["is_stale"] = True
+                    return carried
+                return {
+                    "project_id": proj_id,
+                    "city": p["city"],
+                    "member": p["member"],
+                    "short_id": p["short_id"],
+                    "tables": [], "total_rows": 0, "has_graph": False,
+                    "cpu_utilization_pct": 0.0, "storage_mb": 0.0,
+                    "ticket_price": 0.0, "runs": 0, "processing_units": 100,
+                    "qps": 0.0, "has_embeddings": False, "embedded_count": 0,
+                    "visitors": 0, "revenue": 0.0, "profit": 0.0,
+                    "first_run_timestamp": None, "has_cloud_run": False,
+                    "cloud_run_url": None, "cloud_run_create_time": None,
+                    "cloud_run_status": None,
+                    "is_facilitator": p.get("is_facilitator", False),
+                    "is_stale": True,
+                }
+
         with ThreadPoolExecutor(max_workers=25) as executor:
-            temp_records = list(executor.map(process_participant, participants))
+            temp_records = list(executor.map(safe_process, participants))
 
     max_revenue = max([r["revenue"] for r in temp_records], default=1.0)
     
@@ -712,6 +998,8 @@ def create_initial_baseline_snapshot(admin_project_id: Optional[str] = None) -> 
             "runs": 0,
             "processing_units": 100,
             "qps": 0.0,
+            "has_embeddings": False,
+            "embedded_count": 0,
             "visitors": 0,
             "revenue": 0.0,
             "profit": 0.0,

@@ -32,6 +32,46 @@ if [ -z "${GOOGLE_CLOUD_QUOTA_PROJECT:-}" ]; then
     fi
 fi
 
+# ------------------------------------------------------------------
+# ADC identity pre-flight.
+#
+# The dashboard reads 25 participant projects via Application Default
+# Credentials, NOT via the gcloud CLI identity -- these are frequently
+# different principals. Authenticating as the wrong one does not raise an
+# error: every project simply returns nothing, and the board renders a clean
+# all-zero leaderboard that looks exactly like a correct pre-event baseline.
+# Print the resolved principal so that is obvious before the doors open.
+# ------------------------------------------------------------------
+echo "🪪 Verifying Application Default Credentials..."
+ADC_EMAIL="$("$VENV_DIR/bin/python" - <<'PYEOF' 2>/dev/null || true
+import json, urllib.request
+import google.auth, google.auth.transport.requests
+try:
+    creds, _ = google.auth.default()
+    creds.refresh(google.auth.transport.requests.Request())
+    info = json.load(urllib.request.urlopen(
+        "https://oauth2.googleapis.com/tokeninfo?access_token=" + creds.token))
+    print(info.get("email") or info.get("sub") or "unknown")
+except Exception as e:
+    print(f"UNAVAILABLE ({type(e).__name__})")
+PYEOF
+)"
+if [ -z "$ADC_EMAIL" ]; then ADC_EMAIL="UNAVAILABLE"; fi
+echo "🪪 ADC principal: ${ADC_EMAIL}"
+case "$ADC_EMAIL" in
+    UNAVAILABLE*)
+        echo "⚠️  Could not resolve ADC. Run: gcloud auth application-default login"
+        ;;
+    *@google.com)
+        ;;
+    *)
+        echo "⚠️  WARNING: ADC is '${ADC_EMAIL}'."
+        echo "⚠️  If this principal lacks access to the participant projects, the board"
+        echo "⚠️  will render ALL ZEROS with no error. Re-auth with the correct account:"
+        echo "⚠️      gcloud auth application-default login"
+        ;;
+esac
+
 # Run Streamlit using the virtualenv
 echo "🚀 Launching Streamlit UI..."
 "$VENV_DIR/bin/streamlit" run app.py --server.port="${PORT}" --server.headless=true

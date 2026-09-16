@@ -4,6 +4,7 @@ Implements 5 interactive dramatic event rounds that alter leaderboard standings
 focusing purely on theme park operational events, dynamic rankings, and winner celebration.
 """
 import copy
+import hashlib
 import logging
 from typing import Dict, List, Any, Tuple
 
@@ -44,29 +45,23 @@ CEREMONY_ROUNDS = [
     {
         "round_id": 4,
         "icon": "⚡",
-        "title": "Round 4: Regional Spanner Power Grid Brownout",
-        "subtitle": "Compute Scale vs. Operational Throughput Efficiency",
+        "title": "Round 4: The Green Cloud Efficiency Audit",
+        "subtitle": "Grand Finale — Capacity vs. Delivered Throughput",
         "storyline": (
-            "An electricity crisis hits! The Green Cloud Efficiency Board audits compute allocation: "
-            "parks running on 1,000+ PUs (1 to 4+ full Nodes) with under-utilized capacity (under 400 runs/sec per node) "
-            "were burning idle cloud power and lose 90 points plus a 3% carbon tax penalty on attraction revenues! "
-            "Lean parks achieving over 100 runs/sec on 500 PUs or less earn a Green Cloud Engineering trophy (+90 points and a 3% clean energy rebate)!"
-        )
-    },
-    {
-        "round_id": 5,
-        "icon": "🎆",
-        "title": "Round 5: Mickey's Centenary Jubilee & Grand Graph Finale",
-        "subtitle": "Property Graph Traversal Velocity & Compute Density",
-        "storyline": (
-            "The grand finale! 50,000 VIP tourists flood into the parks for Mickey Mouse's 100th Anniversary Fireworks Parade! "
-            "Disneyland's Central Dispatch routes crowds in real-time using property graph pathfinding. "
-            "Parks are evaluated on Graph Traversal Velocity per Compute Unit (Runs/sec per 100 PUs). "
-            "Parks achieving high throughput density navigate crowds seamlessly, earning massive Jubilee Grants (up to +$300,000) "
-            "and a final score surge (up to +310 pts)! Over-provisioned or low-density clusters suffer heavy pedestrian traffic delays!"
+            "The finale! The Green Cloud Efficiency Board audits every park's compute bill against the work it "
+            "actually delivered. Parks that sized their Spanner instance to their load and drove it hard earn the "
+            "Green Cloud Engineering trophy (up to +180 points and a clean energy rebate). "
+            "Parks that provisioned nodes and left them idling are billed for the wasted capacity "
+            "(down to -100 points plus a carbon tax) — because renting ten nodes to do one node of work "
+            "is the most expensive mistake in cloud data engineering!"
         )
     }
 ]
+
+# Single source of truth for the round count. app.py used to hardcode `5` in
+# seven places, so adding or removing a round silently broke the progress bar,
+# the next-round button clamp, and the fireworks trigger.
+TOTAL_ROUNDS = len(CEREMONY_ROUNDS)
 
 def is_project_active(p: Dict[str, Any]) -> bool:
     """Identifies if a project is actively participating (created tables, runs, or rows)."""
@@ -120,12 +115,19 @@ def apply_event_simulation(
     active_sorted = sorted(list(active_pids))
     n_active = len(active_sorted)
 
-    # Deterministic selection targeting exact percentage of ACTIVE participants
+    # Deterministic selection targeting exact percentage of ACTIVE participants.
+    # NOTE: the built-in hash() is salted per process (PYTHONHASHSEED), so it is
+    # NOT stable across restarts -- rehearsing and then restarting would hit a
+    # different set of parks. Use a fixed digest so the same parks are always
+    # chosen for the same participant list.
+    def _stable_key(token: str) -> int:
+        return int(hashlib.md5(token.encode("utf-8")).hexdigest(), 16)
+
     n_r1 = max(1, round(n_active * 0.50))
-    r1_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_monsoon"))[:n_r1])
-    
+    r1_targets = set(sorted(active_sorted, key=lambda pid: _stable_key(pid + "_monsoon"))[:n_r1])
+
     n_r2 = max(1, round(n_active * 0.25))
-    r2_targets = set(sorted(active_sorted, key=lambda pid: hash(pid + "_glitch"))[:n_r2])
+    r2_targets = set(sorted(active_sorted, key=lambda pid: _stable_key(pid + "_glitch"))[:n_r2])
 
     for r in range(1, round_id + 1):
         for p in participants:
@@ -247,83 +249,95 @@ def apply_event_simulation(
                     if r == round_id:
                         p["round_impact_text"] = "⚖️ Audit Neutral: Standard compliance rating maintained."
 
-            # --- ROUND 4: Power Grid Brownout ---
+            # --- ROUND 4: The Green Cloud Efficiency Audit (Finale) ---
+            #
+            # Two factors, deliberately. CPU utilisation decides the sign and
+            # base size of the award; absolute throughput decides how big the
+            # reward gets on top.
+            #
+            # Neither works alone. A pure efficiency ratio (the old Round 5's
+            # qps-per-PU) is maximised by never leaving the 100 PU floor, so it
+            # punishes the very scaling this round is meant to reward. A pure
+            # throughput measure ignores what the capacity cost. Measured on a
+            # 1000 PU instance vs 100 PU under identical load: throughput rose
+            # 36% while CPU fell from 93.7% to 54.6% - so throughput alone
+            # cannot distinguish "scaled and used it" from "scaled and idled".
             elif r == 4:
-                nodes = max(1.0, pu / 1000.0)
-                runs_per_node = qps / nodes
-                # Over-provisioned compute: Running 1,000+ PUs (1+ nodes) with < 400 runs/sec per node
-                if pu >= 1000 and runs_per_node < 400.0:
-                    carbon_tax = round(p["revenue"] * 0.03, 2)
-                    p["revenue"] = max(0.0, p["revenue"] - carbon_tax)
-                    p["revenue_delta"] -= carbon_tax
-                    p["profit"] = round(p["profit"] - carbon_tax, 2)
-                    p["score"] = max(0, p["score"] - 90)
-                    p["score_delta"] -= 90
-                    if r == round_id:
-                        p["round_revenue_delta"] -= carbon_tax
-                        p["round_score_delta"] -= 90
-                    node_desc = f"{int(nodes)} Nodes ({pu} PUs)" if nodes >= 1.0 else f"{pu} PUs"
-                    impact = f"⚡ Multi-Node Power Waste: {node_desc} at only {runs_per_node:.0f} runs/s/node penalized -90 pts & 3% carbon tax (-${carbon_tax:,.2f})!"
-                    p["event_log"].append(impact)
-                    if r == round_id:
-                        p["round_impact_text"] = impact
-                elif qps >= 100.0 and pu <= 500:
-                    rebate = round(p["revenue"] * 0.03, 2)
-                    p["revenue"] += rebate
-                    p["revenue_delta"] += rebate
-                    p["profit"] = round(p["profit"] + rebate, 2)
-                    p["score"] += 90
-                    p["score_delta"] += 90
-                    if r == round_id:
-                        p["round_revenue_delta"] += rebate
-                        p["round_score_delta"] += 90
-                    impact = f"🌱 Green Cloud Master: High throughput on lean compute rewarded +90 pts & 3% rebate (+${rebate:,.2f})!"
-                    p["event_log"].append(impact)
-                    if r == round_id:
-                        p["round_impact_text"] = impact
-                else:
-                    if r == round_id:
-                        p["round_impact_text"] = "⚡ Grid Stable: Compute-to-throughput ratio within acceptable band."
+                cpu = p.get("cpu_utilization_pct", 0.0)
 
-            # --- ROUND 5: Mickey's Centenary Jubilee Finale ---
-            elif r == 5:
-                if has_graph and total_rows >= 50:
-                    # Graph Traversal Velocity per Compute Unit (Runs/sec per 100 PUs)
-                    eff = qps / max(1.0, pu / 100.0)
-                    if eff >= 100.0:
-                        pts = 310
-                        grant = 300000.0
-                        tier_label = f"⚡ Lightning Graph Grandmaster ({eff:.1f} runs/s per 100 PUs)"
-                    elif eff >= 70.0:
-                        pts = 220
-                        grant = 150000.0
-                        tier_label = f"🥈 Silver Graph Navigator ({eff:.1f} runs/s per 100 PUs)"
-                    elif eff >= 35.0:
-                        pts = 160
-                        grant = 80000.0
-                        tier_label = f"🥉 Bronze Graph Dispatcher ({eff:.1f} runs/s per 100 PUs)"
-                    else:
-                        pts = 60
-                        grant = 50000.0
-                        tier_label = f"🚦 Heavy Graph Traffic ({eff:.1f} runs/s per 100 PUs)"
-
-                    p["score"] += pts
-                    p["score_delta"] += pts
-                    p["revenue"] += grant
-                    p["revenue_delta"] += grant
-                    p["profit"] = round(p["profit"] + grant, 2)
-                    if r == round_id:
-                        p["round_revenue_delta"] += grant
-                        p["round_score_delta"] += pts
-                    impact = f"🎆 {tier_label}: Property Graph routed 50k visitors! (+{pts} pts & +${grant:,.2f} Jubilee Grant)"
-                    p["event_log"].append(impact)
-                    if r == round_id:
-                        p["round_impact_text"] = impact
+                if cpu >= 90.0:
+                    eff_pts = 25
+                    band = f"redlining at {cpu:.0f}% CPU - real work, no headroom left"
+                    icon = "🔥"
+                elif cpu >= 65.0:
+                    eff_pts = 100
+                    band = f"right-sized at {cpu:.0f}% CPU"
+                    icon = "🎯"
+                elif cpu >= 40.0:
+                    eff_pts = 60
+                    band = f"healthy headroom at {cpu:.0f}% CPU"
+                    icon = "🌱"
+                elif pu > 300 and cpu < 15.0:
+                    eff_pts = -100
+                    band = f"{pu} PUs idling at {cpu:.0f}% CPU"
+                    icon = "💸"
+                elif pu > 300:
+                    eff_pts = -60
+                    band = f"{pu} PUs delivering only {cpu:.0f}% CPU of work"
+                    icon = "🪫"
                 else:
-                    impact = "🚫 Parade Gridlock: Missing Property Graph caused pedestrian bottlenecks (0 bonus)."
-                    p["event_log"].append(impact)
-                    if r == round_id:
-                        p["round_impact_text"] = impact
+                    eff_pts = 0
+                    band = f"minimum instance, {cpu:.0f}% CPU"
+                    icon = "🧊"
+
+                if qps >= 2000:
+                    thr_pts = 80
+                elif qps >= 800:
+                    thr_pts = 65
+                elif qps >= 300:
+                    thr_pts = 45
+                elif qps >= 100:
+                    thr_pts = 25
+                elif qps > 0:
+                    thr_pts = 10
+                else:
+                    thr_pts = 0
+
+                total_pts = eff_pts + thr_pts
+
+                # Revenue moves with the verdict: a rebate for efficient
+                # operators, a carbon tax for wasted capacity. The rebate needs
+                # a real result behind it - otherwise a park that did nothing
+                # at all still collects a "clean energy" payout for being idle,
+                # which is the opposite of the lesson.
+                if total_pts >= 40:
+                    adj = round(p["revenue"] * 0.03, 2)
+                    p["revenue"] += adj
+                    p["revenue_delta"] += adj
+                    p["profit"] = round(p["profit"] + adj, 2)
+                    money = f"+${adj:,.2f} clean energy rebate"
+                elif total_pts < 0:
+                    adj = round(p["revenue"] * 0.03, 2)
+                    p["revenue"] = max(0.0, p["revenue"] - adj)
+                    p["revenue_delta"] -= adj
+                    p["profit"] = round(p["profit"] - adj, 2)
+                    money = f"-${adj:,.2f} carbon tax"
+                    adj = -adj
+                else:
+                    adj = 0.0
+                    money = "no rebate earned"
+
+                p["score"] = max(0, p["score"] + total_pts)
+                p["score_delta"] += total_pts
+                if r == round_id:
+                    p["round_revenue_delta"] += adj
+                    p["round_score_delta"] += total_pts
+
+                impact = (f"{icon} Efficiency Audit: {band}, {qps:.1f} runs/sec "
+                          f"({total_pts:+d} pts, {money})")
+                p["event_log"].append(impact)
+                if r == round_id:
+                    p["round_impact_text"] = impact
 
     # Re-sort descending by current round score, then revenue
     participants.sort(key=lambda x: (x.get("score", 0), x.get("revenue", 0.0), x.get("total_rows", 0)), reverse=True)

@@ -88,7 +88,7 @@ def compute_participant_score(
     cloud_run_rank: int = 0
 ) -> Dict[str, Any]:
     """
-    Computes composite hackathon score (0 - 1250) including TrueTime and Cloud Run speed bonuses, and awards badges.
+    Computes composite hackathon score (0 - 1450) including TrueTime and Cloud Run speed bonuses, and awards badges.
     """
     tables = data.get("tables", [])
     row_count = data.get("total_rows", 0)
@@ -103,14 +103,19 @@ def compute_participant_score(
     has_cloud_run = data.get("has_cloud_run", False)
     cloud_run_status = data.get("cloud_run_status", "NONE")
     cr_create_time = data.get("cloud_run_create_time")
+    has_embeddings = data.get("has_embeddings", False)
+    embedded_count = data.get("embedded_count", 0)
     
     # 1. Technical Core DDL Points (Max 300 pts)
     core_tables = ["disneylandpark", "attraction", "path"]
     found_core = sum(1 for t in core_tables if any(t == existing.lower() for existing in tables))
     ddl_score = found_core * 100
     
-    # 2. Graph DDL Points (Max 100 pts)
-    graph_score = 100 if has_graph else 0
+    # 2. Graph DDL Points (Max 200 pts)
+    # Weighted as a headline Phase 2 deliverable. This was 100 while the closing
+    # ceremony's Jubilee round handed out up to +310 more for having a graph;
+    # that round has been removed, so the base score now carries the full weight.
+    graph_score = 200 if has_graph else 0
     
     # 3. Data Row Points (Max 100 pts)
     # 50 rows = full 100 points
@@ -121,23 +126,64 @@ def compute_participant_score(
     has_extended = any(any(ext in t.lower() for ext in extended_tables) for t in tables) or runs > 0
     extended_score = 100 if has_extended else 0
     
-    # 5. Cluster Compute Scaling (Max 100 pts)
-    # 100 PUs = 25 pts (baseline)
-    # 200 - 400 PUs = 50 pts
-    # 500 - 900 PUs = 75 pts
-    # >= 1000 PUs (1+ node) = 100 pts
-    if processing_units >= 1000:
-        scaling_score = 100
-    elif processing_units >= 500:
-        scaling_score = 75
-    elif processing_units >= 200:
-        scaling_score = 50
+    # 5. Cluster Compute Scaling (Max 100 pts) - utilisation aware.
+    #
+    # Provisioning capacity is not an achievement; driving it is. This used to
+    # award a flat 100 points for >= 1000 PUs with no utilisation test, which
+    # paid participants to max out their instance and leave it idle - and then
+    # the closing ceremony fined them for exactly that. Size still sets the
+    # ceiling, but observed peak CPU decides how much of it is earned.
+    if found_core == 0:
+        scaling_score = 0
     else:
-        scaling_score = 25 if found_core > 0 else 0
+        if processing_units >= 1000:
+            size_tier = 100
+        elif processing_units >= 500:
+            size_tier = 75
+        elif processing_units >= 200:
+            size_tier = 50
+        else:
+            size_tier = 25
+
+        if cpu_util >= 65.0:
+            util_factor = 1.0
+        elif cpu_util >= 40.0:
+            util_factor = 0.8
+        elif cpu_util >= 20.0:
+            util_factor = 0.55
+        elif cpu_util >= 5.0:
+            util_factor = 0.35
+        else:
+            util_factor = 0.25
+
+        # 100 PUs is the Spanner floor, not a sizing decision, so a quiet
+        # minimum instance keeps its baseline rather than being penalised.
+        if processing_units <= 100:
+            scaling_score = 25
+        else:
+            scaling_score = int(size_tier * util_factor)
         
     # 6. Ingestion Throughput Velocity (Max 100 pts)
-    # Scales up to 200 runs/sec
-    throughput_score = min(100, int((qps / 200.0) * 100))
+    #
+    # Tiered, not linear. Participants build their own load generators, so
+    # achieved write rates span orders of magnitude: a batched writer commits
+    # thousands of rows/sec while a row-at-a-time client manages tens. The old
+    # linear `qps / 200` curve saturated at 200 and stopped discriminating
+    # between a competent client and an exceptional one.
+    if qps >= 2000:
+        throughput_score = 100
+    elif qps >= 800:
+        throughput_score = 85
+    elif qps >= 300:
+        throughput_score = 70
+    elif qps >= 100:
+        throughput_score = 50
+    elif qps >= 25:
+        throughput_score = 30
+    elif qps > 0:
+        throughput_score = 10
+    else:
+        throughput_score = 0
     
     # 7. Business Revenue Optimization (Max 200 pts)
     if max_revenue_in_event > 0 and revenue > 0:
@@ -197,10 +243,24 @@ def compute_participant_score(
         else:
             cloud_run_bonus = base_rank_bonus
         
+    # 11. Vector Embedding Stretch Goal (Max 100 bonus pts)
+    #
+    # The Embedding ARRAY<FLOAT32>(vector_length=>768) column ships in the
+    # mandatory schema, but populating it is nobody's assigned task - it needs
+    # a Vertex AI text-embedding call per attraction and a write back into
+    # Spanner. Sized as a bonus rather than a core component on purpose: only a
+    # handful of participants will attempt it, and a hidden criterion large
+    # enough to decide the winner would be unfair to everyone who simply
+    # followed the guide.
+    #
+    # metrics.py has already validated coverage and vector diversity, so a
+    # table full of identical zero vectors does not qualify.
+    embedding_score = 100 if has_embeddings else 0
+
     total_score = (
         ddl_score + graph_score + row_score + extended_score + 
         scaling_score + throughput_score + biz_score + speed_bonus + 
-        cloud_run_score + cloud_run_bonus
+        cloud_run_score + cloud_run_bonus + embedding_score
     )
     
     # Badges
@@ -209,8 +269,12 @@ def compute_participant_score(
         badges.append(("🏰", "Castle Architect", "Full DDL & Disneyland Property Graph operational"))
     if row_count >= 50:
         badges.append(("🎢", "Rollercoaster Tycoon", f"High catalog data volume ({row_count} rows)"))
-    if processing_units >= 500:
-        badges.append(("⚡", "Hyperscale Operator", f"Scaled Spanner to {processing_units} PUs"))
+    if processing_units >= 500 and cpu_util >= 40.0:
+        badges.append(("⚡", "Hyperscale Operator", f"Scaled Spanner to {processing_units} PUs and drove it to {cpu_util:.0f}% CPU"))
+    if 65.0 <= cpu_util < 90.0:
+        badges.append(("🎯", "Right-Sized", f"Capacity matched to load ({cpu_util:.0f}% CPU)"))
+    if processing_units > 300 and cpu_util < 15.0:
+        badges.append(("💸", "Idle Fleet", f"{processing_units} PUs provisioned, only {cpu_util:.0f}% CPU used"))
     if qps >= 100.0:
         badges.append(("🚀", "Throughput Titan", f"High write velocity ({qps:.1f} runs/sec)"))
     if cpu_util > 50.0:
@@ -221,6 +285,8 @@ def compute_participant_score(
         badges.append(("⚡", "Sonic Deployer", f"Pioneer Cloud Run deployment (+{cloud_run_bonus} pts)"))
     if speed_bonus >= 75:
         badges.append(("⚡", "Speed Demon", f"First-mover execution velocity (+{speed_bonus} pts)"))
+    if has_embeddings:
+        badges.append(("🧠", "Vector Visionary", f"Generated real 768-dim embeddings for {embedded_count} attractions"))
     if found_core == 0 and row_count == 0:
         badges.append(("💤", "Sleeping Beauty", "Park is quiet, no tables created yet"))
     if ticket_price > 35.0:
@@ -241,6 +307,7 @@ def compute_participant_score(
         "cloud_run_score": cloud_run_score,
         "cloud_run_bonus": cloud_run_bonus,
         "cloud_run_total": cloud_run_score + cloud_run_bonus,
+        "embedding_score": embedding_score,
         "badges": badges
     }
 

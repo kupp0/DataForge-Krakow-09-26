@@ -10,17 +10,17 @@ import plotly.graph_objects as go
 import time
 import copy
 
-import importlib
 import metrics
 import business_rules
 import llm_announcer
 import ceremony_engine
 import ceremony_audio
-for _mod in [metrics, business_rules, llm_announcer, ceremony_engine, ceremony_audio]:
-    try:
-        importlib.reload(_mod)
-    except Exception:
-        pass
+# NOTE: Do NOT importlib.reload() these modules here. Reloading rebinds
+# BackgroundTelemetryManager to a new class object whose _instance is None, so
+# every Streamlit rerun built a new manager and started an additional
+# SpannerTelemetryPoller thread that was never stopped (measured: 1 -> 2 -> 3
+# pollers over 3 reruns). Streamlit's file watcher already reloads on change.
+
 from metrics import get_leaderboard_snapshot, get_default_admin_project, parse_projects_mapping, clear_telemetry_cache
 from business_rules import BENCHMARK_PRICE, calculate_elasticity_demand
 from llm_announcer import generate_flash_commentary
@@ -123,7 +123,6 @@ def build_empty_chart(title: str, x_label: str, y_label: str):
     return fig
 
 # Cached Plotly Chart Builders for Ultra-Fast Instant In-Memory Rendering
-@st.cache_data(show_spinner=False)
 def build_revenue_chart(df: pd.DataFrame):
     if df.empty or "revenue" not in df.columns or "city" not in df.columns:
         return build_empty_chart("Total Disneyland Revenue by City ($)", "City", "Revenue ($)")
@@ -139,7 +138,6 @@ def build_revenue_chart(df: pd.DataFrame):
     fig_rev.update_layout(xaxis_tickangle=-45)
     return fig_rev
 
-@st.cache_data(show_spinner=False)
 def build_scatter_chart(df: pd.DataFrame):
     if df.empty or "revenue" not in df.columns or "ticket_price" not in df.columns:
         return build_empty_chart("Ticket Price vs Revenue vs Total Visitors", "Ticket Price ($)", "Revenue ($)")
@@ -156,7 +154,6 @@ def build_scatter_chart(df: pd.DataFrame):
     )
     return fig_scatter
 
-@st.cache_data(show_spinner=False)
 def build_qps_chart(df: pd.DataFrame):
     if df.empty or "qps" not in df.columns or "city" not in df.columns:
         return build_empty_chart("Direct Write Ingestion Throughput (Runs / Sec)", "City", "Runs/sec")
@@ -173,7 +170,6 @@ def build_qps_chart(df: pd.DataFrame):
     fig_qps.update_layout(xaxis_tickangle=-45)
     return fig_qps
 
-@st.cache_data(show_spinner=False)
 def build_pu_chart(df: pd.DataFrame):
     if df.empty or "processing_units" not in df.columns or "city" not in df.columns:
         return build_empty_chart("Spanner Compute Capacity (Processing Units)", "City", "PUs")
@@ -191,7 +187,6 @@ def build_pu_chart(df: pd.DataFrame):
     fig_pu.update_layout(xaxis_tickangle=-45)
     return fig_pu
 
-@st.cache_data(show_spinner=False)
 def build_cpu_chart(df: pd.DataFrame):
     if df.empty or "cpu_utilization_pct" not in df.columns or "city" not in df.columns:
         return build_empty_chart("Spanner Max CPU Utilization (%)", "City", "Max CPU %")
@@ -209,7 +204,6 @@ def build_cpu_chart(df: pd.DataFrame):
     fig_cpu.update_layout(xaxis_tickangle=-45)
     return fig_cpu
 
-@st.cache_data(show_spinner=False)
 def build_storage_chart(df: pd.DataFrame):
     if df.empty or "storage_mb" not in df.columns or "city" not in df.columns:
         return build_empty_chart("Spanner Storage Consumption (MB)", "City", "Storage (MB)")
@@ -283,9 +277,14 @@ with col_head_title:
     st.markdown("Real-time telemetry, scoring, revenue gamification & closing ceremony for **Lab 2 (Disneyland Spanner Hackathon)**.")
 with col_head_btn:
     st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
-    if st.button("🎪 Launch Closing Ceremony", type="primary", use_container_width=True, help="Open the flashy full-screen Closing Ceremony pop-up"):
+    if st.button("🎪 Launch Closing Ceremony", type="primary", width='stretch', help="Open the flashy full-screen Closing Ceremony pop-up"):
         st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
         st.session_state["ceremony_modal_open"] = True
+        # Rewind to the pre-ceremony state. Without this, relaunching after a
+        # finished ceremony reopens on the final round with the podium already
+        # decided, skipping the entire build-up.
+        st.session_state["ceremony_round"] = 0
+        st.session_state["show_winner_revealed"] = False
         st.rerun()
 
 # Dedicated placeholder for Roast HUD to preserve static element indices
@@ -300,7 +299,7 @@ with col_ref2:
     if st.button("🔄 Redraw UI"):
         st.rerun()
 
-if st.sidebar.button("🧹 Clean Cache / Restart", help="Wipes disk and in-memory cache, clears session state, and restarts the application", use_container_width=True):
+if st.sidebar.button("🧹 Clean Cache / Restart", help="Wipes disk and in-memory cache, clears session state, and restarts the application", width='stretch'):
     telemetry_mgr.reset_and_clear_cache()
     st.cache_data.clear()
     st.cache_resource.clear()
@@ -311,16 +310,28 @@ if st.sidebar.button("🧹 Clean Cache / Restart", help="Wipes disk and in-memor
 # Telemetry Poller status badge
 _, initial_status = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
 age = initial_status["age_seconds"]
+poller_error = initial_status.get("last_error")
 if initial_status["is_fetching"]:
     st.sidebar.caption("📡 **Telemetry Poller**: 🟡 *Querying Spanner in background...*")
+elif poller_error:
+    # Previously this always showed green once a fetch finished, so a board
+    # frozen by backend failures looked healthy on the projector.
+    st.sidebar.caption(
+        f"📡 **Telemetry Poller**: 🔴 *Sync FAILED ({age}s ago)* — {poller_error[:120]}"
+    )
+elif age > 180:
+    st.sidebar.caption(f"📡 **Telemetry Poller**: 🟠 *Stale — last good sync {age}s ago*")
 else:
     st.sidebar.caption(f"📡 **Telemetry Poller**: 🟢 *Synced ({age}s ago)*")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎪 Closing Ceremony")
-if st.sidebar.button("🎪 Launch Ceremony Pop-up", type="primary", use_container_width=True, key="sidebar_ceremony_launch"):
+if st.sidebar.button("🎪 Launch Ceremony Pop-up", type="primary", width='stretch', key="sidebar_ceremony_launch"):
     st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
     st.session_state["ceremony_modal_open"] = True
+    # Rewind to the pre-ceremony state (see the header launch button).
+    st.session_state["ceremony_round"] = 0
+    st.session_state["show_winner_revealed"] = False
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -432,13 +443,13 @@ def show_closing_ceremony_modal(
         item["rank"] = rank_idx
 
     # 2. On Round 5 Grand Finale Winner Reveal, render HTML5 Canvas Fireworks
-    if cur_round == 5 and is_revealed:
+    if cur_round == ceremony_engine.TOTAL_ROUNDS and is_revealed:
         components.html(ceremony_audio.get_fireworks_canvas_html(), height=0)
 
     # 3. Interactive Step Controls
     ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([1.2, 1.2, 1.5, 1.0])
     with ctrl_col1:
-        if st.button("⏮️ Round 0 (Reset)", use_container_width=True):
+        if st.button("⏮️ Round 0 (Reset)", width='stretch'):
             st.session_state["ceremony_round"] = 0
             st.session_state["show_winner_revealed"] = False
             raw_snap, _ = telemetry_mgr.get_snapshot(admin_project, use_mock=use_mock_data)
@@ -450,32 +461,33 @@ def show_closing_ceremony_modal(
             st.session_state["ceremony_frozen_snapshot"] = copy.deepcopy(snap)
             st.rerun()
     with ctrl_col2:
-        if st.button("◀ Previous Event", use_container_width=True, disabled=(cur_round <= 0)):
+        if st.button("◀ Previous Event", width='stretch', disabled=(cur_round <= 0)):
             st.session_state["ceremony_round"] = max(0, cur_round - 1)
             st.session_state["show_winner_revealed"] = False
             st.rerun()
     with ctrl_col3:
-        if cur_round < 5:
-            if st.button(f"Next Event ▶ (Round {cur_round + 1}/5)", type="primary", use_container_width=True):
-                st.session_state["ceremony_round"] = min(5, cur_round + 1)
+        if cur_round < ceremony_engine.TOTAL_ROUNDS:
+            if st.button(f"Next Event ▶ (Round {cur_round + 1}/{ceremony_engine.TOTAL_ROUNDS})", type="primary", width='stretch'):
+                st.session_state["ceremony_round"] = min(ceremony_engine.TOTAL_ROUNDS, cur_round + 1)
                 st.session_state["show_winner_revealed"] = False
                 st.rerun()
         else:
             if not is_revealed:
-                if st.button("👑 Show Winner", type="primary", use_container_width=True):
+                if st.button("👑 Show Winner", type="primary", width='stretch'):
                     st.session_state["show_winner_revealed"] = True
                     st.rerun()
             else:
-                if st.button("🎉 Replay Winner Reveal", type="primary", use_container_width=True):
+                if st.button("🎉 Replay Winner Reveal", type="primary", width='stretch'):
                     st.session_state["show_winner_revealed"] = True
                     st.rerun()
     with ctrl_col4:
-        if st.button("✖ Close Stage", use_container_width=True):
+        if st.button("✖ Close Stage", width='stretch'):
             st.session_state["ceremony_modal_open"] = False
             st.rerun()
 
     # Progress Tracker
-    st.progress(cur_round / 5.0, text=f"Ceremony Progress: Round {cur_round} / 5")
+    st.progress(cur_round / float(ceremony_engine.TOTAL_ROUNDS),
+                text=f"Ceremony Progress: Round {cur_round} / {ceremony_engine.TOTAL_ROUNDS}")
 
     # Calculate simulated standings based on frozen scoped baseline snapshot
     sim_data, round_meta = ceremony_engine.apply_event_simulation(scoped_baseline, cur_round)
@@ -492,7 +504,7 @@ def show_closing_ceremony_modal(
       <div style="display: flex; justify-content: space-between; align-items: center;">
         <h3 style="margin: 0; color: #ff79c6;">{round_meta.get('icon', '🎪')} {round_meta.get('title', '')}</h3>
         <span style="font-size: 0.85em; background: #3b4261; color: #7aa2f7; padding: 3px 10px; border-radius: 12px; font-weight: bold;">
-          ROUND {cur_round} OF 5
+          ROUND {cur_round} OF {ceremony_engine.TOTAL_ROUNDS}
         </span>
       </div>
       <h5 style="margin: 6px 0 10px 0; color: #7dcfff;">{round_meta.get('subtitle', '')}</h5>
@@ -523,17 +535,17 @@ def show_closing_ceremony_modal(
         """, unsafe_allow_html=True)
 
     # Winner Announcement & Podium on Round 5
-    if cur_round == 5:
+    if cur_round == ceremony_engine.TOTAL_ROUNDS:
         if not is_revealed:
-            st.markdown("""
+            st.markdown(f"""
             <div style="background: linear-gradient(135deg, #1e2030 0%, #24283b 100%); border: 2px dashed #f6c177; border-radius: 12px; padding: 25px; text-align: center; margin: 20px 0;">
-              <h2 style="color: #f6c177; margin: 0 0 8px 0;">🏁 Round 5 Concluded • The Stage Is Set!</h2>
+              <h2 style="color: #f6c177; margin: 0 0 8px 0;">🏁 Final Round Concluded • The Stage Is Set!</h2>
               <p style="color: #c0caf5; font-size: 1.1em; margin: 0 0 15px 0;">
-                All 5 rounds of theme park events are complete. Click below to reveal the podium and celebrate the top 3 winners!
+                All {ceremony_engine.TOTAL_ROUNDS} rounds of theme park events are complete. Click below to reveal the podium and celebrate the top 3 winners!
               </p>
             </div>
             """, unsafe_allow_html=True)
-            if st.button("👑 Show Winner & Reveal Top 3 Podium", type="primary", use_container_width=True, key="dlg_show_winner_btn"):
+            if st.button("👑 Show Winner & Reveal Top 3 Podium", type="primary", width='stretch', key="dlg_show_winner_btn"):
                 st.session_state["show_winner_revealed"] = True
                 st.session_state["last_sound_fx"] = "winner_revealed"
                 st.rerun()
@@ -739,7 +751,7 @@ def show_closing_ceremony_modal(
                 xaxis_title="Position Delta (Ranks)",
                 yaxis_title=""
             )
-            st.plotly_chart(fig_shift, use_container_width=True)
+            st.plotly_chart(fig_shift, width='stretch')
         
         with ch_col2:
             fin_df = pd.DataFrame([
@@ -772,7 +784,7 @@ def show_closing_ceremony_modal(
                 xaxis_title="Revenue Change ($)",
                 yaxis_title=""
             )
-            st.plotly_chart(fig_fin, use_container_width=True)
+            st.plotly_chart(fig_fin, width='stretch')
 
     with st.expander("🔍 Filter Parks by Incident Status (Hit vs Safe)", expanded=False):
         sub_col1, sub_col2 = st.columns(2)
@@ -829,7 +841,7 @@ def show_closing_ceremony_modal(
             "Badges": badge_str or "—"
         })
     
-    st.dataframe(pd.DataFrame(ceremony_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(ceremony_rows), width='stretch', hide_index=True)
 
 
 is_ceremony_active = st.session_state.get("ceremony_modal_open", False)
@@ -1268,7 +1280,7 @@ def render_live_telemetry_board(
             leaderboard_df = pd.DataFrame(display_rows)
             st.dataframe(
                 leaderboard_df, 
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config={
                     "Score": st.column_config.ProgressColumn(
@@ -1334,10 +1346,10 @@ def render_live_telemetry_board(
         chart_col1, chart_col2 = st.columns(2)
     
         with chart_col1:
-            st.plotly_chart(build_revenue_chart(df), use_container_width=True)
+            st.plotly_chart(build_revenue_chart(df), width='stretch')
         
         with chart_col2:
-            st.plotly_chart(build_scatter_chart(df), use_container_width=True)
+            st.plotly_chart(build_scatter_chart(df), width='stretch')
 
     # --- TAB 3: Spanner Telemetry & Load ---
     with tab_spanner:
@@ -1345,17 +1357,17 @@ def render_live_telemetry_board(
     
         scale_col1, scale_col2 = st.columns(2)
         with scale_col1:
-            st.plotly_chart(build_qps_chart(df), use_container_width=True)
+            st.plotly_chart(build_qps_chart(df), width='stretch')
         
         with scale_col2:
-            st.plotly_chart(build_pu_chart(df), use_container_width=True)
+            st.plotly_chart(build_pu_chart(df), width='stretch')
         
         cpu_col1, cpu_col2 = st.columns(2)
         with cpu_col1:
-            st.plotly_chart(build_cpu_chart(df), use_container_width=True)
+            st.plotly_chart(build_cpu_chart(df), width='stretch')
         
         with cpu_col2:
-            st.plotly_chart(build_storage_chart(df), use_container_width=True)
+            st.plotly_chart(build_storage_chart(df), width='stretch')
 
     # --- TAB 4: DDL & Schema Progress ---
     with tab_schema:
@@ -1386,7 +1398,7 @@ def render_live_telemetry_board(
         
             st.dataframe(
                 pd.DataFrame(schema_rows), 
-                use_container_width=True, 
+                width='stretch', 
                 hide_index=True,
                 column_config={
                     "App URL": st.column_config.LinkColumn(
@@ -1404,7 +1416,7 @@ def render_live_telemetry_board(
         is_revealed = st.session_state.get("show_winner_revealed", False)
         
         status_badge = "❄️ Baseline Frozen (Round 0)" if cur_round == 0 else (
-            f"⚡ In Progress (Round {cur_round} / 5)" if cur_round < 5 else (
+            f"⚡ In Progress (Round {cur_round} / {ceremony_engine.TOTAL_ROUNDS})" if cur_round < ceremony_engine.TOTAL_ROUNDS else (
                 "👑 Concluded & Champion Crowned" if is_revealed else "🏁 Round 5 Completed (Awaiting Reveal)"
             )
         )
@@ -1415,7 +1427,7 @@ def render_live_telemetry_board(
             <div>
               <h2 style="margin: 0; color: #ff79c6; font-size: 1.8em;">🎪 Interactive Closing Ceremony Arena</h2>
               <div style="margin-top: 4px; color: #c0caf5; font-size: 1.05em;">
-                Dramatic 5-round disaster simulation, live Cloud Spanner DML, and Olympic podium with celebratory music.
+                Dramatic multi-round disaster simulation, live Cloud Spanner DML, and Olympic podium with celebratory music.
               </div>
             </div>
             <span style="background: #3b4261; color: #7dcfff; padding: 6px 16px; border-radius: 20px; font-weight: bold; font-size: 0.9em; border: 1px solid #7dcfff;">
@@ -1430,12 +1442,15 @@ def render_live_telemetry_board(
 
         stage_col1, stage_col2 = st.columns([1.5, 1])
         with stage_col1:
-            if st.button("🎪 Launch Closing Ceremony Pop-up", type="primary", use_container_width=True, key="tab5_launch_btn"):
+            if st.button("🎪 Launch Closing Ceremony Pop-up", type="primary", width='stretch', key="tab5_launch_btn"):
                 st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
                 st.session_state["ceremony_modal_open"] = True
+                # Rewind to the pre-ceremony state (see the header launch button).
+                st.session_state["ceremony_round"] = 0
+                st.session_state["show_winner_revealed"] = False
                 st.rerun()
         with stage_col2:
-            if st.button("⏮️ Reset Ceremony Freeze (Round 0)", use_container_width=True, key="tab5_reset_btn"):
+            if st.button("⏮️ Reset Ceremony Freeze (Round 0)", width='stretch', key="tab5_reset_btn"):
                 st.session_state["ceremony_round"] = 0
                 st.session_state["show_winner_revealed"] = False
                 st.session_state["ceremony_frozen_snapshot"] = freeze_ceremony_baseline(admin_project, selected_project_ids, filter_inactive, use_mock_data)
@@ -1486,7 +1501,7 @@ def render_live_telemetry_board(
                 "Badges": badge_str or "—"
             })
 
-        st.dataframe(pd.DataFrame(ceremony_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(ceremony_rows), width='stretch', hide_index=True)
 
 # Mount live telemetry board
 render_live_telemetry_board(

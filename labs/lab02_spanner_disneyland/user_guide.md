@@ -555,9 +555,13 @@ While physical visitor attendance is capped, modern Disney parks process tens of
 
 ---
 
-### 🎯 Step 2: Build & Run the Load Benchmark with `agy` `[TASK]`
+### 🎯 Step 2: Build & Run Your Own Load Benchmark with `agy` `[TASK]`
 
-Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)** to generate and execute a multi-threaded Spanner stress-testing tool (`spanner_stress_test.py`) against your instance:
+**There is no load-testing tool provided.** You build it. That is the point of this step — you cannot tune a system you have not measured, and the leaderboard scores the numbers *your* generator produces.
+
+Your objective: **get the most write throughput out of the least provisioned capacity.** Concurrency, batch size, transaction shape, and retry behaviour are all yours to choose, and they all move the score.
+
+Switch to your **Cloud Workstation terminal** (in Code-OSS) and launch the **Antigravity CLI (`agy`)**. The prompt below is a starting point — extend it, argue with it, and iterate:
 
 ```bash
 agy --dangerously-skip-permissions "Create and execute a high-throughput multi-threaded Python stress-testing script (spanner_stress_test.py) for Cloud Spanner database 'agent-lab':
@@ -565,13 +569,18 @@ The script should:
 1. Connect to Spanner instance 'disneyland' and database 'agent-lab' using google-cloud-spanner.
 2. Read the existing Attraction IDs from 'Attraction'.
 3. Accept CLI arguments: --threads (default 16), --batch-size (default 200, max 500), --duration-seconds (default 90), and --target-qps (default 250).
-4. Set realistic ticket prices ($15.00 to $22.00) so park admissions maximize profit under the 85,000-guest capacity constraint.
+4. Set realistic ticket prices (\$15.00 to \$22.00) so park admissions maximize profit under the 85,000-guest capacity constraint.
 5. In parallel worker threads, commit batch mutations into 'AttractionRun' with PENDING_COMMIT_TIMESTAMP(), tracking write throughput (runs/sec), P95 commit latency, and gRPC error retries.
 6. Print real-time progress every 5 seconds (Current QPS, Total Committed Rows, Average Latency ms).
 7. Execute the benchmark for 90 seconds. If Spanner CPU exceeds 80% or write latency spikes, alert the operator to vertically scale compute PUs via gcloud."
 ```
 
 With `--dangerously-skip-permissions`, `agy` will generate the implementation plan, write `spanner_stress_test.py`, and run the benchmark.
+
+> [!TIP]
+> **Questions worth answering with data, not intuition:** What is your write bottleneck — client concurrency, commit latency, or Spanner itself? Does a bigger batch actually help? Is your primary key distributing writes evenly, or are you fighting yourself?
+>
+> Once writes are tuned, try layering a **read/query workload** on top (graph traversals, revenue aggregations) to see how Spanner isolates readers from writers.
 
 ---
 
@@ -588,34 +597,34 @@ During and immediately following your load test:
    * Special badges unlocked:
      * 🏰 **Castle Architect** (Complete DDL & Graph)
      * 💰 **Disney Tycoon** (Top revenue & profit optimization)
-     * ⚡ **Hyperscale Operator** (Scaled compute to $\ge$ 500 PUs)
-     * 🚀 **Throughput Titan** (Sustained write velocity $\ge$ 100 runs/sec)
+     * ⚡ **Hyperscale Operator** (Serious compute — *and* the load to justify it)
+     * 🎯 **Right-Sized** (Capacity well matched to your actual workload)
+     * 🚀 **Throughput Titan** (Sustained high write velocity)
      * 🔥 **Spanner Meltdown** (Saturated CPU under load)
+     * 💸 **Idle Fleet** (*you do not want this one*)
 
 ---
 
-### ⚡ Step 4: Vertical Scaling & Maximizing Throughput `[TASK]`
+### ⚡ Step 4: Scaling Compute & Maximizing Throughput `[TASK]`
 
 Now that you have run your initial load test against the baseline instance, evaluate the observed performance:
 
 * **The Baseline Bottleneck**: By default, your `disneyland` Spanner instance is provisioned with **100 Processing Units (PUs)** (0.1 Node). Under multi-threaded concurrent ingestion, 100 PUs saturate rapidly at 100% CPU. When saturated, Spanner queues incoming requests, write latencies spike, throughput plateaus, and you likely triggered the **🔥 Spanner Meltdown** badge on the leaderboard.
-* **The Scaling Lever (Vertical Scaling)**: In Cloud Spanner, compute capacity can be scaled vertically on-the-fly with zero downtime, zero data repartitioning delays, and without dropping database connections. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more compute capacity.
+* **The Scaling Lever**: Cloud Spanner is a **distributed** SQL database. Adding Processing Units adds serving capacity across the fleet and lets Spanner split your data across more resources — on-the-fly, with zero downtime, no data repartitioning delay, and without dropping connections. If your city's **Runs/sec** plateaus or CPU turns red, your park needs more capacity.
 
-#### 1. Vertically Scale Spanner PUs
-Run this command in your terminal to scale your instance compute capacity (e.g., to 500 or 1000 PUs):
+#### Re-Run Your Load Test Against More Capacity
+Adjust your instance capacity, then re-run **your own** load generator with increased concurrency to actually saturate it:
 ```bash
-# Scale your instance to 500 or 1000 PUs for high-throughput ingestion
-gcloud spanner instances update disneyland --processing-units=500
+python3 spanner_stress_test.py --threads 32 --duration-seconds 90
 ```
 
-#### 2. Re-Run Load Test with Higher Concurrency
-With 500+ PUs provisioned, re-run the Python load test script with increased concurrency to saturate the new capacity:
-```bash
-python3 spanner_load_test.py --threads 16 --duration-seconds 90
-```
+> [!WARNING]
+> **Capacity you do not use costs you points.** The leaderboard does not reward provisioned PUs on their own — it rewards capacity you actually *drive*. An over-provisioned instance sitting idle scores worse than a small instance working hard, and the closing ceremony's **Green Cloud Efficiency Audit** is unkind to wasted compute.
+>
+> Scale because your measurements told you to, not because bigger sounds better.
 
 > [!TIP]
-> **Leaderboard Strategy**: The central dashboard tracks both your **Compute Capacity (PUs)** and **Direct Write Throughput (Runs/sec)**. Scaling beyond the baseline awards bonus points and unlocks the **⚡ Hyperscale Operator** ($\ge$ 500 PUs) and **🚀 Throughput Titan** ($\ge$ 100 runs/sec) badges!
+> **Leaderboard Strategy**: Benchmark *before* you scale so you have a baseline, scale, then benchmark *again*. Sustained throughput and efficient use of what you provisioned both count — a brief spike is not the same as a park that can hold the line.
 
 ---
 
@@ -632,8 +641,11 @@ python3 spanner_load_test.py --threads 16 --duration-seconds 90
      LIMIT 10;
      ```
 * **📊 Architecture Visualization (PlantUML)**: Ask `agy` to generate a PlantUML sequence diagram showing request flow from frontend to Spanner (`agy "Generate a PlantUML sequence diagram for our app"`).
-* **🔍 In-Database Vector Embeddings & Semantic Search**:
+* **🔍 In-Database Vector Embeddings & Semantic Search** — 🏆 *the leaderboard notices parks that do this*:
   Notice that the initial data ingestion in Phase 2 left `Attraction.Embedding` unpopulated (`NULL`). Before running vector searches, you must generate embeddings for attraction descriptions. Cloud Spanner natively supports [in-database embedding generation and backfills](https://cloud.google.com/spanner/docs/backfill-embeddings) via remote Vertex AI model integration, eliminating the need to pull raw text into client applications.
+
+  > [!WARNING]
+  > The leaderboard checks that embeddings are genuinely generated from your attraction data. Placeholder or constant vectors do not count.
 
   Using the multilingual embedding model [`text-multilingual-embedding-002`](https://cloud.google.com/gemini-enterprise-agent-platform/models/embeddings/get-text-embeddings) (768 dimensions), you can register a Spanner `MODEL` and execute backfills directly inside Spanner SQL.
 

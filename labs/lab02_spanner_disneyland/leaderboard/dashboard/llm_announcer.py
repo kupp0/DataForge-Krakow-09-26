@@ -48,7 +48,7 @@ ROAST_TEMPLATES = [
     },
     {
         "category": "schema_tuning",
-        "emoji": "�️",
+        "emoji": "🛠️",
         "roast": "{city} spent the last thirty minutes fine-tuning database schemas without recording a single ticket sale.",
         "rhyme": "The schema looks pretty and the indexes are aligned,\nNow push some transactions, {city}, don't get left behind!"
     },
@@ -210,7 +210,12 @@ Respond ONLY with valid JSON in this exact structure:
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0.95,
-                "maxOutputTokens": 1000
+                # NOTE: on Gemini 3.x this budget is shared between *thinking*
+                # tokens and output tokens. Measured thinking usage for this
+                # prompt is 682-956 tokens, so the previous value of 1000 left
+                # too little room for the ~110-token JSON body and truncated it
+                # (finishReason=MAX_TOKENS) in roughly 1 of every 10 calls.
+                "maxOutputTokens": 4000
             }
         }
 
@@ -223,9 +228,12 @@ Respond ONLY with valid JSON in this exact structure:
             data=json.dumps(payload).encode("utf-8")
         )
 
-        with urllib.request.urlopen(req, timeout=12) as response:
+        # A thinking model on a ~2.4k-token prompt regularly needs more than 12s.
+        with urllib.request.urlopen(req, timeout=45) as response:
             res_data = json.loads(response.read().decode("utf-8"))
-            candidate = res_data.get("candidates", [{}])[0]
+            candidates = res_data.get("candidates") or [{}]
+            candidate = candidates[0]
+            finish_reason = candidate.get("finishReason")
             parts = candidate.get("content", {}).get("parts", [])
             text = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
             
@@ -263,8 +271,16 @@ Respond ONLY with valid JSON in this exact structure:
                 parsed["model"] = "Gemini 3.8 Flash"
                 return parsed
 
+            # Reaching here previously fell through to the fallback silently,
+            # making a degraded roaster indistinguishable from a healthy one.
+            logger.warning(
+                "LLM roast unusable, using fallback "
+                f"(finishReason={finish_reason}, text_len={len(text)}): {text[:200]!r}"
+            )
+
     except Exception as e:
         logger.warning(f"LLM roast generation fallback: {e}")
+
 
     # Fallback to rich dynamic selection
     fallback = generate_dynamic_fallback_roast(leaderboard_data)
